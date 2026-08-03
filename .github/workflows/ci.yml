@@ -24,4 +24,6 @@ jobs:
       - uses: astral-sh/setup-uv@v9.0.0
       - run: uv sync --extra dev --locked
       - run: uv run pytest -q
+        env:
+          CI: "false"
       - run: uv build

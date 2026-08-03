@@ -252,17 +252,17 @@ def test_atomic_replace_creates_private_adjacent_backup(tmp_path: Path) -> None:
 def test_windows_private_files_use_existing_acl_hardener(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "config.json"
     target.write_text("private", encoding="utf-8")
-    calls: list[tuple[Path, bool]] = []
+    calls: list[tuple[str, bool]] = []
 
     def hardened(path: Path, *, is_dir: bool) -> SecurityFinding:
-        calls.append((Path(path), is_dir))
+        calls.append((str(path), is_dir))
         return SecurityFinding(str(path), "ok", "restricted")
 
     monkeypatch.setattr(integration_files.os, "name", "nt")
     monkeypatch.setattr(integration_files, "harden_path", hardened)
     integration_files._make_private(target, is_dir=False)
 
-    assert calls == [(target, False)]
+    assert calls == [(str(target), False)]
 
 
 def test_noop_does_not_create_backup(tmp_path: Path) -> None:
