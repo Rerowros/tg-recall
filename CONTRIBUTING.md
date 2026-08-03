@@ -4,6 +4,7 @@
 
 ```powershell
 uv sync --extra dev
+uv run tg-recall --help
 uv run pytest -q
 uv build
 ```

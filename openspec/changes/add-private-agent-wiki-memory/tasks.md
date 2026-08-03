@@ -1,7 +1,7 @@
 ## 1. Storage And Privacy
 
 - [ ] 1.1 Add migrations for wiki snapshots, page revisions, and citation mappings.
-- [ ] 1.2 Create private wiki directory helpers and extend Git/package exclusion tests.
+- [ ] 1.2 Create profile-aware private wiki directory helpers and extend Git/package exclusion tests.
 
 ## 2. Compilation
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 CONFIRMATION_PHRASE = "I understand this can change my local Telegram archive"
-TRUSTED_AUTOMATION_ENV = "TG_ECOSYSTEM_TRUSTED_AUTOMATION"
+TRUSTED_AUTOMATION_ENV = "TG_RECALL_TRUSTED_AUTOMATION"
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,7 @@ class SecurityFinding:
 def is_automation_shell() -> bool:
     return any(
         os.environ.get(name, "").lower() in {"1", "true", "yes"}
-        for name in ["CI", "CODEX", "AI_TERMINAL", "TG_ECOSYSTEM_AI_MODE"]
+        for name in ["CI", "CODEX", "AI_TERMINAL", "TG_RECALL_AI_MODE", "TG_ECOSYSTEM_AI_MODE"]
     )
 
 
@@ -44,7 +44,10 @@ def require_human_confirmation(
             return
         raise PermissionError("confirmation phrase did not match")
 
-    if os.environ.get(TRUSTED_AUTOMATION_ENV) == "1" and provided_phrase == CONFIRMATION_PHRASE:
+    if (
+        os.environ.get(TRUSTED_AUTOMATION_ENV) == "1"
+        or os.environ.get("TG_ECOSYSTEM_TRUSTED_AUTOMATION") == "1"
+    ) and provided_phrase == CONFIRMATION_PHRASE:
         return
 
     raise PermissionError(

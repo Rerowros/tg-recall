@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from tg_ecosystem.config import AppConfig, TelegramConfig
-from tg_ecosystem.storage import Database
-from tg_ecosystem.telegram_client import TelegramArchiveClient
+from tg_recall.config import AppConfig, TelegramConfig
+from tg_recall.storage import Database
+from tg_recall.telegram_client import TelegramArchiveClient
 
 
 class FakeFloodWaitError(Exception):
@@ -19,6 +19,7 @@ class FakeFloodWaitError(Exception):
 class FakeClient:
     def __init__(self, *, flood: bool = False):
         self.flood = flood
+        self.message_args = {}
 
     async def __aenter__(self):
         return self
@@ -36,7 +37,8 @@ class FakeClient:
             entity=SimpleNamespace(username="work"),
         )
 
-    async def iter_messages(self, chat_id, limit=100):
+    async def iter_messages(self, chat_id, limit=100, **kwargs):
+        self.message_args = {"chat_id": chat_id, "limit": limit, **kwargs}
         if self.flood:
             raise FakeFloodWaitError(3)
         yield SimpleNamespace(
@@ -78,7 +80,7 @@ def test_chat_discovery_with_mocked_telegram(tmp_path, monkeypatch) -> None:
 
 def test_flood_wait_is_persisted(tmp_path, monkeypatch) -> None:
     import asyncio
-    import tg_ecosystem.telegram_client as module
+    import tg_recall.telegram_client as module
 
     db = Database(tmp_path / "archive.sqlite3")
     db.migrate()
@@ -93,3 +95,23 @@ def test_flood_wait_is_persisted(tmp_path, monkeypatch) -> None:
     with db.connect() as conn:
         row = conn.execute("SELECT retry_after FROM sync_state WHERE chat_id = 10").fetchone()
     assert row["retry_after"] is not None
+
+
+def test_sync_uses_newest_watermark_and_backfill_uses_oldest(tmp_path, monkeypatch) -> None:
+    import asyncio
+    import tg_recall.telegram_client as module
+
+    db = Database(tmp_path / "archive.sqlite3")
+    db.migrate()
+    db.create_scope("work", [10], None, None)
+    db.update_sync_state(10, newest_message_id=50, oldest_message_id=10)
+    client = TelegramArchiveClient(cfg(), db)
+    fake = FakeClient()
+    monkeypatch.setattr(client, "_client", lambda: fake)
+    monkeypatch.setattr(module, "_load_telethon", lambda: (object, FakeFloodWaitError))
+
+    asyncio.run(client.sync_scope("work"))
+    assert fake.message_args["min_id"] == 50
+
+    asyncio.run(client.sync_scope("work", backfill=True))
+    assert fake.message_args["max_id"] == 1

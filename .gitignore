@@ -10,6 +10,7 @@ build/
 
 # Local archive state, secrets, and derived private data
 .tg-ecosystem/
+.tg-recall/
 exports/
 reports/
 *_report.md

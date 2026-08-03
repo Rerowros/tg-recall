@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.0 - Unreleased
+
+- Rename the public CLI and package to `tg-recall`; retain deprecated legacy executable aliases.
+- Add platform-aware roots, portable `--home` mode and isolated Telegram profiles.
+- Store new media by relative content-addressed keys instead of absolute filesystem paths.
+- Add scope media/transcription policies, `sync ensure`, local Whisper detection, agent guide/retrieve/export/materialize commands, safe legacy migration and consistent backups.
+
 ## v0.1.0 - 2026-08-03
 
 Initial public early-alpha release.

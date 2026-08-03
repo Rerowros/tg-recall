@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from tg_ecosystem.telegram_client import chat_from_dialog, message_from_telethon
+from tg_recall.telegram_client import chat_from_dialog, message_from_telethon
 
 
 def test_chat_from_dialog_detects_group() -> None:

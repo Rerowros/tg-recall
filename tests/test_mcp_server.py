@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from tg_ecosystem.config import AIAccessPolicy, AppConfig
-from tg_ecosystem.mcp_server import ReadOnlyMCPServer
-from tg_ecosystem.models import ChatRecord, MessageRecord
-from tg_ecosystem.storage import Database
+from tg_recall.config import AIAccessPolicy, AppConfig
+from tg_recall.mcp_server import ReadOnlyMCPServer
+from tg_recall.models import ChatRecord, MessageRecord
+from tg_recall.storage import Database
 
 
 def server_with_data(tmp_path, allowed: list[int]) -> ReadOnlyMCPServer:

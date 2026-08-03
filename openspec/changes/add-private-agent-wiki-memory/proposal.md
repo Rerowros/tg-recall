@@ -23,4 +23,4 @@ None.
 
 ## Impact
 
-The change will add SQLite metadata for snapshots and revisions, a private `.tg-ecosystem/wiki/` directory, CLI/MCP interfaces, and tests. It will not send archive data to an external service or publish wiki content in source distributions.
+The change will add SQLite metadata for snapshots and revisions, a private profile-aware `data/profiles/<profile>/wiki/` directory, CLI/MCP interfaces, and tests. It will not send archive data to an external service or publish wiki content in source distributions.

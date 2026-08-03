@@ -4,10 +4,10 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from tg_ecosystem.assistant import ArchiveAssistant
-from tg_ecosystem.config import AppConfig
-from tg_ecosystem.models import ChatRecord, MessageRecord, SearchFilters
-from tg_ecosystem.storage import Database
+from tg_recall.assistant import ArchiveAssistant
+from tg_recall.config import AppConfig
+from tg_recall.models import ChatRecord, MessageRecord, SearchFilters
+from tg_recall.storage import Database
 
 
 def load_fixture(db: Database) -> int:

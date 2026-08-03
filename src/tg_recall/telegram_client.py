@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
-from .media import MediaDownloader, MediaStore
+from .media import MediaStore, sha256_file
 from .models import ChatRecord, MessageRecord
 from .storage import Database
 from .transcription import is_transcribable_media
@@ -66,7 +68,7 @@ class TelegramArchiveClient:
         self.db.audit("telegram_chats_discovered", details={"count": len(chats)})
         return chats
 
-    async def sync_scope(self, scope_name: str, limit: int = 100) -> dict[str, int]:
+    async def sync_scope(self, scope_name: str, limit: int = 100, backfill: bool = False) -> dict[str, int]:
         scope = self.db.get_scope(scope_name)
         if not scope:
             raise ValueError(f"Unknown sync scope: {scope_name}")
@@ -83,8 +85,14 @@ class TelegramArchiveClient:
                 oldest_id: int | None = None
                 since = parse_date(scope.get("since"))
                 until = parse_date(scope.get("until"))
+                state = self.db.get_sync_state(chat_id)
+                iterator_args: dict[str, Any] = {"limit": limit}
+                if backfill and state and state.get("oldest_message_id"):
+                    iterator_args["max_id"] = state["oldest_message_id"]
+                elif not backfill and state and state.get("newest_message_id"):
+                    iterator_args["min_id"] = state["newest_message_id"]
                 try:
-                    async for message in client.iter_messages(chat_id, limit=limit):
+                    async for message in client.iter_messages(chat_id, **iterator_args):
                         message_date = ensure_aware(message.date)
                         if until and message_date > until:
                             continue
@@ -95,8 +103,18 @@ class TelegramArchiveClient:
                         newest_id = max(newest_id or record.message_id, record.message_id)
                         oldest_id = min(oldest_id or record.message_id, record.message_id)
                         synced += 1
-                        if record.has_media and record.media_type:
-                            self.db.enqueue_media(chat_id, record.message_id, record.media_type, telegram_file_id=str(record.message_id))
+                        if record.has_media and record.media_type and media_policy_allows(scope["media_policy"], record.media_type):
+                            media_id = self.db.enqueue_media(
+                                chat_id,
+                                record.message_id,
+                                record.media_type,
+                                telegram_file_id=str(record.message_id),
+                                transcription_policy=scope["transcription_policy"],
+                            )
+                            if scope["transcription_policy"] != "off":
+                                media = self.db.get_media(media_id)
+                                if media and media.status == "downloaded":
+                                    self.db.enqueue_transcription(media_id)
                             media_jobs += 1
                     self.db.update_sync_state(chat_id, newest_message_id=newest_id, oldest_message_id=oldest_id)
                 except FloodWaitError as exc:
@@ -104,10 +122,10 @@ class TelegramArchiveClient:
                     self.db.update_sync_state(chat_id, retry_after=retry_after)
                     self.db.audit("telegram_flood_wait", scope_name, chat_id=chat_id, seconds=exc.seconds)
                     raise
-        self.db.audit("telegram_scope_synced", scope_name, messages=synced, media_jobs=media_jobs)
-        return {"messages": synced, "media_jobs": media_jobs}
+        self.db.audit("telegram_scope_synced", scope_name, messages=synced, media_jobs=media_jobs, backfill=backfill)
+        return {"messages": synced, "media_jobs": media_jobs, "backfill": int(backfill)}
 
-    async def download_pending_media(self, limit: int = 20) -> dict[str, int]:
+    async def download_pending_media(self, limit: int = 20, media_ids: set[int] | None = None) -> dict[str, int]:
         client = self._client()
         async with client:
             async def download(chat_id: int, message_id: int, destination: Any) -> Any:
@@ -122,49 +140,48 @@ class TelegramArchiveClient:
             completed = 0
             failed = 0
             skipped = 0
-            for job in self.db.get_pending_jobs("media_download", limit=limit):
+            for job in self.db.get_pending_jobs("media_download", limit=limit, media_ids=media_ids):
                 if job.chat_id is None or job.message_id is None or job.media_id is None:
                     self.db.update_job(job.id, "failed", "media job is missing ids", retryable=False)
                     failed += 1
                     continue
                 media = self.db.get_media(job.media_id)
-                if media and media.status == "downloaded" and media.local_path:
+                store = MediaStore(self.config.media_dir, Path(self.config.cache_dir) / "downloads")
+                current_path = store.path_for_media(media) if media else None
+                if media and media.status == "downloaded" and current_path and current_path.exists():
                     self.db.update_job(job.id, "done")
                     skipped += 1
                     continue
                 try:
-                    import shutil
-                    from pathlib import Path
-                    from .media import sha256_file
-
-                    temp_dir = MediaStore(self.config.media_dir).root / "_tmp" / str(job.id)
-                    temp_dir.mkdir(parents=True, exist_ok=True)
-                    downloaded = Path(await download(job.chat_id, job.message_id, temp_dir / "download"))
+                    downloaded = Path(await download(job.chat_id, job.message_id, store.temporary_path(job.id)))
                     digest = sha256_file(downloaded)
                     existing = self.db.find_media_by_sha256(digest)
-                    if existing and existing.local_path:
-                        final_path = Path(existing.local_path)
+                    existing_path = store.path_for_media(existing) if existing else None
+                    if existing_path and existing_path.exists():
+                        final_path = existing_path
                         if downloaded != final_path:
                             downloaded.unlink(missing_ok=True)
                     else:
-                        final_path = MediaStore(self.config.media_dir).path_for_sha256(digest, downloaded.suffix)
+                        final_path = store.path_for_sha256(digest, downloaded.suffix)
+                        final_path.parent.mkdir(parents=True, exist_ok=True)
                         if downloaded != final_path:
                             shutil.move(str(downloaded), final_path)
                     self.db.update_media_downloaded(
                         job.media_id,
-                        local_path=str(final_path),
+                        storage_key=store.storage_key_for_sha256(digest, downloaded.suffix),
                         sha256=digest,
                         size_bytes=final_path.stat().st_size,
+                        enqueue_transcription=_job_needs_transcription(job.payload_json),
                     )
                     self.db.update_job(job.id, "done")
                     completed += 1
                 except Exception as exc:
-                    self.db.update_job(job.id, "failed", str(exc), retryable=True)
+                    self.db.update_job(job.id, "retry", str(exc), retryable=True)
                     failed += 1
             self.db.audit("telegram_media_download_run", details={"completed": completed, "failed": failed, "skipped": skipped})
             return {"completed": completed, "failed": failed, "skipped": skipped}
 
-    async def transcribe_pending_with_telegram(self, limit: int = 20) -> dict[str, int]:
+    async def transcribe_pending_with_telegram(self, limit: int = 20, media_ids: set[int] | None = None) -> dict[str, int]:
         try:
             from telethon import functions
         except ImportError as exc:
@@ -175,7 +192,7 @@ class TelegramArchiveClient:
         failed = 0
         skipped = 0
         async with client:
-            for job in self.db.get_pending_jobs("transcription", limit=limit):
+            for job in self.db.get_pending_jobs("transcription", limit=limit, media_ids=media_ids):
                 if job.media_id is None:
                     self.db.update_job(job.id, "failed", "transcription job is missing media id", retryable=False)
                     failed += 1
@@ -199,7 +216,7 @@ class TelegramArchiveClient:
                         skipped += 1
                         continue
                     if not text:
-                        self.db.update_job(job.id, "failed", "Telegram returned an empty transcript", retryable=False)
+                        self.db.update_job(job.id, "retry", "Telegram returned an empty transcript", retryable=True)
                         failed += 1
                         continue
                     self.db.insert_transcript(
@@ -211,7 +228,7 @@ class TelegramArchiveClient:
                     self.db.update_job(job.id, "done")
                     completed += 1
                 except Exception as exc:
-                    self.db.update_job(job.id, "failed", str(exc), retryable=True)
+                    self.db.update_job(job.id, "retry", str(exc), retryable=True)
                     failed += 1
         self.db.audit("telegram_transcription_run", details={"completed": completed, "failed": failed, "skipped": skipped})
         return {"completed": completed, "failed": failed, "skipped": skipped}
@@ -290,6 +307,18 @@ def detect_media_type(message: Any) -> str | None:
     if getattr(message, "media", None):
         return "media"
     return None
+
+
+def media_policy_allows(policy: str, media_type: str) -> bool:
+    values = {item.strip() for item in policy.split(",") if item.strip()}
+    return "all" in values or media_type in values
+
+
+def _job_needs_transcription(payload_json: str) -> bool:
+    try:
+        return json.loads(payload_json).get("transcription_policy", "auto") != "off"
+    except json.JSONDecodeError:
+        return True
 
 
 def parse_date(value: str | None) -> datetime | None:

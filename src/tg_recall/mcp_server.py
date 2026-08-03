@@ -24,7 +24,7 @@ class ReadOnlyMCPServer:
             if method == "initialize":
                 result = {
                     "protocolVersion": "2025-03-26",
-                    "serverInfo": {"name": "tg-ecosystem", "version": "0.1.0"},
+                    "serverInfo": {"name": "tg-recall", "version": "0.2.0"},
                     "capabilities": {"tools": {}},
                 }
             elif method == "tools/list":
@@ -167,6 +167,11 @@ def main() -> int:
         response = server.handle(json.loads(line))
         print(json.dumps(response, ensure_ascii=False), flush=True)
     return 0
+
+
+def legacy_main() -> int:
+    print("warning: tg-ecosystem-mcp is deprecated; use tg-recall-mcp", file=sys.stderr)
+    return main()
 
 
 if __name__ == "__main__":

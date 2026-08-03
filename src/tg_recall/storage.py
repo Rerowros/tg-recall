@@ -13,7 +13,7 @@ from .models import ChatRecord, JobRecord, MediaRecord, MessageRecord, SearchFil
 from .security import harden_path
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class Database:
@@ -58,6 +58,8 @@ class Database:
                     name TEXT PRIMARY KEY,
                     since TEXT,
                     until TEXT,
+                    media_policy TEXT NOT NULL DEFAULT 'none',
+                    transcription_policy TEXT NOT NULL DEFAULT 'off',
                     created_at TEXT NOT NULL
                 );
 
@@ -102,6 +104,7 @@ class Database:
                     mime_type TEXT,
                     size_bytes INTEGER,
                     sha256 TEXT,
+                    storage_key TEXT,
                     local_path TEXT,
                     status TEXT NOT NULL DEFAULT 'pending',
                     created_at TEXT NOT NULL,
@@ -168,11 +171,20 @@ class Database:
                 );
                 """
             )
+            self._ensure_column(conn, "sync_scopes", "media_policy", "TEXT NOT NULL DEFAULT 'none'")
+            self._ensure_column(conn, "sync_scopes", "transcription_policy", "TEXT NOT NULL DEFAULT 'off'")
+            self._ensure_column(conn, "media", "storage_key", "TEXT")
             conn.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, now_iso()),
             )
         harden_path(self.path, is_dir=False)
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def audit(self, event_type: str, scope: str | None = None, **details: Any) -> None:
         safe_details = redact_details(details)
@@ -184,6 +196,16 @@ class Database:
                 """,
                 (event_type, scope, json.dumps(safe_details, ensure_ascii=False), now_iso()),
             )
+
+    def health(self) -> dict[str, Any]:
+        with self.connect() as conn:
+            integrity = conn.execute("PRAGMA quick_check").fetchone()[0]
+            counts = {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("chats", "messages", "media", "transcripts", "jobs")
+            }
+            latest = conn.execute("SELECT MAX(last_synced_at) FROM sync_state").fetchone()[0]
+        return {"integrity": integrity, "counts": counts, "last_synced_at": latest}
 
     def upsert_chat(self, chat: ChatRecord) -> None:
         with self.connect() as conn:
@@ -205,17 +227,31 @@ class Database:
         with self.connect() as conn:
             return list(conn.execute("SELECT * FROM chats ORDER BY lower(title)"))
 
-    def create_scope(self, name: str, chat_ids: list[int], since: str | None, until: str | None) -> None:
+    def create_scope(
+        self,
+        name: str,
+        chat_ids: list[int],
+        since: str | None,
+        until: str | None,
+        media_policy: str = "none",
+        transcription_policy: str = "off",
+    ) -> None:
         if not chat_ids:
             raise ValueError("Scope must include at least one chat")
+        _validate_media_policy(media_policy)
+        _validate_transcription_policy(transcription_policy)
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO sync_scopes(name, since, until, created_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET since=excluded.since, until=excluded.until
+                INSERT INTO sync_scopes(name, since, until, media_policy, transcription_policy, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    since=excluded.since,
+                    until=excluded.until,
+                    media_policy=excluded.media_policy,
+                    transcription_policy=excluded.transcription_policy
                 """,
-                (name, since, until, now_iso()),
+                (name, since, until, media_policy, transcription_policy, now_iso()),
             )
             conn.execute("DELETE FROM scope_chats WHERE scope_name = ?", (name,))
             conn.executemany(
@@ -235,7 +271,14 @@ class Database:
                     (name,),
                 )
             ]
-            return {"name": row["name"], "since": row["since"], "until": row["until"], "chat_ids": chat_ids}
+            return {
+                "name": row["name"],
+                "since": row["since"],
+                "until": row["until"],
+                "media_policy": row["media_policy"],
+                "transcription_policy": row["transcription_policy"],
+                "chat_ids": chat_ids,
+            }
 
     def list_scopes(self) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -248,7 +291,16 @@ class Database:
                         (row["name"],),
                     )
                 ]
-                scopes.append({"name": row["name"], "since": row["since"], "until": row["until"], "chat_ids": chats})
+                scopes.append(
+                    {
+                        "name": row["name"],
+                        "since": row["since"],
+                        "until": row["until"],
+                        "media_policy": row["media_policy"],
+                        "transcription_policy": row["transcription_policy"],
+                        "chat_ids": chats,
+                    }
+                )
             return scopes
 
     def upsert_message(self, message: MessageRecord) -> None:
@@ -329,7 +381,19 @@ class Database:
                     (chat_id, newest_message_id, oldest_message_id, now_iso(), retry_after),
                 )
 
-    def enqueue_media(self, chat_id: int, message_id: int, media_type: str, telegram_file_id: str | None = None) -> int:
+    def get_sync_state(self, chat_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM sync_state WHERE chat_id = ?", (chat_id,)).fetchone()
+        return dict(row) if row else None
+
+    def enqueue_media(
+        self,
+        chat_id: int,
+        message_id: int,
+        media_type: str,
+        telegram_file_id: str | None = None,
+        transcription_policy: str = "auto",
+    ) -> int:
         with self.connect() as conn:
             conn.execute(
                 """
@@ -349,27 +413,48 @@ class Database:
                 (chat_id, message_id, media_type, telegram_file_id, telegram_file_id),
             ).fetchone()
             media_id = int(row["id"])
-            conn.execute(
-                """
-                INSERT INTO jobs(stage, status, chat_id, message_id, media_id, created_at, updated_at)
-                VALUES ('media_download', 'pending', ?, ?, ?, ?, ?)
-                """,
-                (chat_id, message_id, media_id, now_iso(), now_iso()),
-            )
+            exists = conn.execute(
+                """SELECT 1 FROM jobs
+                   WHERE stage = 'media_download' AND media_id = ? AND status IN ('pending', 'retry', 'done')""",
+                (media_id,),
+            ).fetchone()
+            if not exists:
+                conn.execute(
+                    """
+                    INSERT INTO jobs(stage, status, chat_id, message_id, media_id, payload_json, created_at, updated_at)
+                    VALUES ('media_download', 'pending', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        chat_id,
+                        message_id,
+                        media_id,
+                        json.dumps({"transcription_policy": transcription_policy}),
+                        now_iso(),
+                        now_iso(),
+                    ),
+                )
             return media_id
 
-    def get_pending_jobs(self, stage: str, limit: int = 20) -> list[JobRecord]:
+    def get_pending_jobs(self, stage: str, limit: int = 20, media_ids: set[int] | None = None) -> list[JobRecord]:
+        media_filter = ""
+        params: list[Any] = [stage, now_iso()]
+        if media_ids:
+            placeholders = ", ".join("?" for _ in media_ids)
+            media_filter = f" AND media_id IN ({placeholders})"
+            params.extend(sorted(media_ids))
+        params.append(limit)
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, stage, status, chat_id, message_id, media_id, payload_json
                 FROM jobs
                 WHERE stage = ? AND status IN ('pending', 'retry')
                   AND (retry_after IS NULL OR retry_after <= ?)
+                  {media_filter}
                 ORDER BY id
                 LIMIT ?
                 """,
-                (stage, now_iso(), limit),
+                params,
             ).fetchall()
             return [
                 JobRecord(
@@ -383,6 +468,27 @@ class Database:
                 )
                 for row in rows
             ]
+
+    def requeue_media_download(self, media_id: int, transcription_policy: str = "auto") -> None:
+        with self.connect() as conn:
+            media = conn.execute("SELECT chat_id, message_id FROM media WHERE id = ?", (media_id,)).fetchone()
+            if not media:
+                raise ValueError(f"Unknown media id: {media_id}")
+            exists = conn.execute(
+                "SELECT 1 FROM jobs WHERE stage = 'media_download' AND media_id = ? AND status IN ('pending', 'retry')",
+                (media_id,),
+            ).fetchone()
+            if not exists:
+                conn.execute(
+                    """
+                    INSERT INTO jobs(stage, status, chat_id, message_id, media_id, payload_json, created_at, updated_at)
+                    VALUES ('media_download', 'pending', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        media["chat_id"], media["message_id"], media_id,
+                        json.dumps({"transcription_policy": transcription_policy}), now_iso(), now_iso(),
+                    ),
+                )
 
     def update_job(self, job_id: int, status: str, error: str | None = None, retryable: bool = False, retry_after: str | None = None) -> None:
         with self.connect() as conn:
@@ -428,35 +534,66 @@ class Database:
                 mime_type=row["mime_type"],
                 size_bytes=row["size_bytes"],
                 sha256=row["sha256"],
+                storage_key=row["storage_key"],
                 local_path=row["local_path"],
                 status=row["status"],
             )
+
+    def media_for_message(self, chat_id: int, message_id: int) -> list[MediaRecord]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM media WHERE chat_id = ? AND message_id = ? ORDER BY id",
+                (chat_id, message_id),
+            ).fetchall()
+        return [self._media_record(row) for row in rows]
+
+    def pending_media_ids_for_chats(self, chat_ids: list[int], media_policy: str = "all") -> set[int]:
+        if not chat_ids:
+            return set()
+        where, params = _media_policy_where(chat_ids, media_policy)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT id FROM media WHERE {where} AND status != 'downloaded'",
+                params,
+            ).fetchall()
+        return {int(row["id"]) for row in rows}
+
+    def media_ids_for_chats(self, chat_ids: list[int], media_policy: str = "all") -> set[int]:
+        if not chat_ids:
+            return set()
+        where, params = _media_policy_where(chat_ids, media_policy)
+        with self.connect() as conn:
+            rows = conn.execute(f"SELECT id FROM media WHERE {where}", params).fetchall()
+        return {int(row["id"]) for row in rows}
 
     def update_media_downloaded(
         self,
         media_id: int,
         *,
-        local_path: str,
         sha256: str,
         size_bytes: int,
+        storage_key: str | None = None,
+        local_path: str | None = None,
         mime_type: str | None = None,
+        enqueue_transcription: bool = True,
     ) -> None:
         with self.connect() as conn:
             conn.execute(
                 """
                 UPDATE media
-                SET local_path = ?, sha256 = ?, size_bytes = ?, mime_type = COALESCE(?, mime_type),
+                SET storage_key = COALESCE(?, storage_key), local_path = COALESCE(?, local_path),
+                    sha256 = ?, size_bytes = ?, mime_type = COALESCE(?, mime_type),
                     status = 'downloaded', updated_at = ?
                 WHERE id = ?
                 """,
-                (local_path, sha256, size_bytes, mime_type, now_iso(), media_id),
+                (storage_key, local_path, sha256, size_bytes, mime_type, now_iso(), media_id),
             )
             media = conn.execute("SELECT chat_id, message_id FROM media WHERE id = ?", (media_id,)).fetchone()
             exists = conn.execute(
                 "SELECT 1 FROM jobs WHERE stage = 'transcription' AND media_id = ? AND status IN ('pending', 'retry')",
                 (media_id,),
             ).fetchone()
-            if media and not exists:
+            if media and enqueue_transcription and not exists:
                 conn.execute(
                     """
                     INSERT INTO jobs(stage, status, chat_id, message_id, media_id, created_at, updated_at)
@@ -471,31 +608,16 @@ class Database:
                 "UPDATE media SET status = 'failed', updated_at = ? WHERE id = ?",
                 (now_iso(), media_id),
             )
-            conn.execute(
-                """
-                INSERT INTO jobs(stage, status, media_id, error, retryable, created_at, updated_at)
-                VALUES ('media_download', 'failed', ?, ?, 1, ?, ?)
-                """,
-                (media_id, error, now_iso(), now_iso()),
-            )
 
     def find_media_by_sha256(self, digest: str) -> MediaRecord | None:
         with self.connect() as conn:
-            row = conn.execute("SELECT * FROM media WHERE sha256 = ? AND local_path IS NOT NULL LIMIT 1", (digest,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM media WHERE sha256 = ? AND (storage_key IS NOT NULL OR local_path IS NOT NULL) LIMIT 1",
+                (digest,),
+            ).fetchone()
             if not row:
                 return None
-            return MediaRecord(
-                id=row["id"],
-                chat_id=row["chat_id"],
-                message_id=row["message_id"],
-                telegram_file_id=row["telegram_file_id"],
-                media_type=row["media_type"],
-                mime_type=row["mime_type"],
-                size_bytes=row["size_bytes"],
-                sha256=row["sha256"],
-                local_path=row["local_path"],
-                status=row["status"],
-            )
+            return self._media_record(row)
 
     def insert_transcript(
         self,
@@ -741,9 +863,43 @@ class Database:
                 for row in rows
             ]
 
+    def export_messages(self, filters: SearchFilters, limit: int = 10000) -> list[dict[str, Any]]:
+        where, params = _message_filter_sql("m", filters)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT m.chat_id, m.message_id, m.date, m.text, m.sender_id, m.sender_name,
+                       m.reply_to_message_id, m.forward_from, m.edit_date, m.has_media, m.media_type,
+                       m.links_json, c.title AS chat_title
+                FROM messages m
+                LEFT JOIN chats c ON c.chat_id = m.chat_id
+                WHERE 1 = 1 {where}
+                ORDER BY m.chat_id, m.message_id
+                LIMIT ?
+                """,
+                [*params, limit],
+            ).fetchall()
+        return [dict(row) | {"citation": f"tg://chat/{row['chat_id']}/message/{row['message_id']}"} for row in rows]
+
     def _chat_title(self, conn: sqlite3.Connection, chat_id: int) -> str:
         row = conn.execute("SELECT title FROM chats WHERE chat_id = ?", (chat_id,)).fetchone()
         return row["title"] if row else ""
+
+    @staticmethod
+    def _media_record(row: sqlite3.Row) -> MediaRecord:
+        return MediaRecord(
+            id=row["id"],
+            chat_id=row["chat_id"],
+            message_id=row["message_id"],
+            telegram_file_id=row["telegram_file_id"],
+            media_type=row["media_type"],
+            mime_type=row["mime_type"],
+            size_bytes=row["size_bytes"],
+            sha256=row["sha256"],
+            storage_key=row["storage_key"],
+            local_path=row["local_path"],
+            status=row["status"],
+        )
 
     def _upsert_semantic(
         self,
@@ -788,6 +944,36 @@ def redact_details(details: dict[str, Any]) -> dict[str, Any]:
 
 def tokenize(text: str) -> set[str]:
     return {token for token in re.findall(r"[\w']+", text.lower()) if len(token) > 2}
+
+
+def _validate_media_policy(value: str) -> None:
+    allowed = {"none", "voice", "audio", "photo", "video", "document", "all"}
+    selected = {item.strip() for item in value.split(",") if item.strip()}
+    if not selected or not selected <= allowed:
+        raise ValueError(f"Invalid media policy: {value}")
+    if "all" in selected and len(selected) > 1:
+        raise ValueError("media policy 'all' cannot be combined with other values")
+    if "none" in selected and len(selected) > 1:
+        raise ValueError("media policy 'none' cannot be combined with other values")
+
+
+def _validate_transcription_policy(value: str) -> None:
+    if value not in {"off", "telegram", "local", "auto"}:
+        raise ValueError(f"Invalid transcription policy: {value}")
+
+
+def _media_policy_where(chat_ids: list[int], media_policy: str) -> tuple[str, list[Any]]:
+    selected = {item.strip() for item in media_policy.split(",") if item.strip()}
+    if "none" in selected:
+        return "1 = 0", []
+    chat_placeholders = ", ".join("?" for _ in chat_ids)
+    params: list[Any] = list(chat_ids)
+    where = f"chat_id IN ({chat_placeholders})"
+    if "all" not in selected:
+        type_placeholders = ", ".join("?" for _ in selected)
+        where += f" AND media_type IN ({type_placeholders})"
+        params.extend(sorted(selected))
+    return where, params
 
 
 def _message_filter_sql(

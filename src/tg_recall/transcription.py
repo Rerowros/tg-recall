@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from .models import MediaRecord
 from .storage import Database
+
 
 @dataclass(frozen=True)
 class TranscriptResult:
@@ -32,23 +36,6 @@ class DisabledProvider:
         raise RuntimeError("External transcription is disabled by provider policy")
 
 
-def is_transcribable_media(media_type: str | None) -> bool:
-    return media_type in {"voice", "audio", "video"}
-
-
-class TelegramTranscriptionProvider:
-    name = "telegram"
-
-    def transcribe_media_record(self, media_id: int) -> TranscriptResult:
-        return TranscriptResult(
-            provider=self.name,
-            text="",
-            status="unavailable",
-            error_type="telegram_transcription_not_connected",
-            retryable=False,
-        )
-
-
 class SidecarTextProvider:
     name = "sidecar-text"
 
@@ -61,22 +48,66 @@ class SidecarTextProvider:
         return TranscriptResult(provider=self.name, text=sidecar.read_text(encoding="utf-8"))
 
 
+class WhisperCLIProvider:
+    name = "local-whisper"
+
+    def __init__(self, output_dir: str | Path):
+        self.output_dir = Path(output_dir)
+
+    @staticmethod
+    def available() -> bool:
+        return shutil.which("whisper") is not None
+
+    def transcribe(self, media_path: Path) -> TranscriptResult:
+        executable = shutil.which("whisper")
+        if not executable:
+            raise RuntimeError("Local Whisper CLI is not installed or not in PATH")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        before = set(self.output_dir.glob("*.json"))
+        result = subprocess.run(
+            [executable, str(media_path), "--output_dir", str(self.output_dir), "--output_format", "json"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError((result.stderr or result.stdout or "whisper failed").strip())
+        outputs = [path for path in self.output_dir.glob("*.json") if path not in before]
+        if not outputs:
+            expected = self.output_dir / f"{media_path.stem}.json"
+            outputs = [expected] if expected.exists() else []
+        if not outputs:
+            raise RuntimeError("whisper did not produce a JSON transcript")
+        payload = json.loads(max(outputs, key=lambda item: item.stat().st_mtime).read_text(encoding="utf-8"))
+        return TranscriptResult(
+            provider=self.name,
+            text=str(payload.get("text", "")).strip(),
+            language=payload.get("language"),
+            segments=payload.get("segments") or [],
+        )
+
+
+def is_transcribable_media(media_type: str | None) -> bool:
+    return media_type in {"voice", "audio", "video"}
+
+
 class TranscriptionService:
     def __init__(
         self,
         db: Database,
         fallback_provider: SpeechToTextProvider | None = None,
-        telegram_provider: TelegramTranscriptionProvider | None = None,
+        *,
+        media_store: object | None = None,
+        cache_dir: str | Path | None = None,
     ):
         self.db = db
         self.fallback_provider = fallback_provider or SidecarTextProvider()
-        self.telegram_provider = telegram_provider or TelegramTranscriptionProvider()
+        self.media_store = media_store
+        self.cache_dir = Path(cache_dir) if cache_dir else None
 
-    def run_pending(self, limit: int = 20) -> dict[str, int]:
-        completed = 0
-        failed = 0
-        skipped = 0
-        for job in self.db.get_pending_jobs("transcription", limit=limit):
+    def run_pending(self, limit: int = 20, media_ids: set[int] | None = None) -> dict[str, int]:
+        completed = failed = skipped = 0
+        for job in self.db.get_pending_jobs("transcription", limit=limit, media_ids=media_ids):
             if job.media_id is None:
                 self.db.update_job(job.id, "failed", "transcription job is missing media id", retryable=False)
                 failed += 1
@@ -90,38 +121,38 @@ class TranscriptionService:
                 self.db.update_job(job.id, "skipped", "media type is not transcribable", retryable=False)
                 skipped += 1
                 continue
-            if not media.local_path:
+            media_path = self._media_path(media)
+            if media_path is None or not media_path.exists():
                 self.db.update_job(job.id, "retry", "media is not downloaded yet", retryable=True)
                 skipped += 1
                 continue
-
-            telegram_result = self.telegram_provider.transcribe_media_record(media.id)
-            if telegram_result.status == "success" and telegram_result.text:
-                self.db.insert_transcript(media.id, telegram_result.provider, telegram_result.text, telegram_result.language, telegram_result.segments)
-                self.db.update_job(job.id, "done")
-                completed += 1
-                continue
-
             try:
-                media_path = Path(media.local_path)
                 if media.media_type == "video":
-                    extracted = extract_video_audio(media_path)
-                    media_path = extracted or media_path
+                    media_path = extract_video_audio(media_path, self.cache_dir)
                 result = self.fallback_provider.transcribe(media_path)
+                if not result.text:
+                    raise RuntimeError("transcription provider returned empty text")
                 self.db.insert_transcript(media.id, result.provider, result.text, result.language, result.segments)
                 self.db.update_job(job.id, "done")
                 completed += 1
             except Exception as exc:
-                self.db.update_job(job.id, "failed", str(exc), retryable=True)
+                self.db.update_job(job.id, "retry", str(exc), retryable=True)
                 failed += 1
         self.db.audit("transcription_run", details={"completed": completed, "failed": failed, "skipped": skipped})
         return {"completed": completed, "failed": failed, "skipped": skipped}
 
+    def _media_path(self, media: MediaRecord) -> Path | None:
+        if self.media_store is not None:
+            return self.media_store.path_for_media(media)
+        return Path(media.local_path) if media.local_path else None
 
-def extract_video_audio(video_path: Path) -> Path | None:
+
+def extract_video_audio(video_path: Path, output_dir: Path | None = None) -> Path:
     if video_path.suffix.lower() not in {".mp4", ".mov", ".mkv", ".webm", ".avi"}:
-        return None
-    output = video_path.with_suffix(video_path.suffix + ".audio.wav")
+        return video_path
+    target_dir = output_dir or video_path.parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    output = target_dir / f"{video_path.stem}.audio.wav"
     if output.exists():
         return output
     result = subprocess.run(
