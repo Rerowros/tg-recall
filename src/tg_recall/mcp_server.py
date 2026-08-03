@@ -6,6 +6,7 @@ from dataclasses import asdict
 from typing import Any
 
 from . import __version__
+from .agent_routing import AgentGuide, build_agent_guide
 from .assistant import ArchiveAssistant, expand_cited_sources, knowledge_catalog_lookup
 from .config import AppConfig, load_config
 from .hybrid_retrieval import RetrievalMode, SemanticUnavailableError
@@ -35,6 +36,7 @@ class ReadOnlyMCPServer:
                     "protocolVersion": "2025-03-26",
                     "serverInfo": {"name": "tg-recall", "version": __version__},
                     "capabilities": {"tools": {}},
+                    "instructions": _mcp_initialize_instructions(build_agent_guide()),
                 }
             elif method == "tools/list":
                 result = {"tools": self.tools()}
@@ -355,6 +357,26 @@ def _result_dict(item: Any) -> dict[str, Any]:
     data = asdict(item)
     data["citation"] = item.citation
     return data
+
+
+def _mcp_initialize_instructions(guide: AgentGuide) -> str:
+    """Render a compact, advisory subset of the canonical runtime guide.
+
+    MCP clients may display this field, but it never changes the static
+    read-only tool surface or grants lifecycle/configuration access.
+    """
+
+    budgets = guide.budgets
+    forbidden = ", ".join((*guide.safety.forbidden_operations, "update/integrate lifecycle commands"))
+    return "\n".join(
+        (
+            f"tg-recall guide schema {guide.schema_version}; prompt {guide.prompt_version}; package {guide.tg_recall_version}.",
+            "MCP is read-only: use only explicitly allowed chat/date scope and cite conclusions with tg:// evidence.",
+            f"Start bounded: --limit {budgets.initial_limit} --context {budgets.initial_context} --token-budget {budgets.initial_token_budget}; widen once at most.",
+            f"For narrow read-only delegated lookup prefer {guide.routing.spark.value} only when available and suitable; otherwise use {guide.routing.luna.value} at low or medium reasoning.",
+            f"Forbidden: {forbidden}.",
+        )
+    )
 
 
 def _media_filter_types(policy: str | None) -> tuple[str, ...] | None:

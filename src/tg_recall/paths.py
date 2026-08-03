@@ -46,6 +46,26 @@ class AppRoots:
             Path(user_cache_dir(APP_NAME, appauthor=False)).resolve(),
         )
 
+    @property
+    def release_update_cache_dir(self) -> Path:
+        """Public release metadata cache, deliberately outside every profile."""
+
+        return self.cache / "updates" / "v1"
+
+    @property
+    def release_update_cache_path(self) -> Path:
+        return self.release_update_cache_dir / "latest.json"
+
+    @property
+    def release_update_artifacts_dir(self) -> Path:
+        return self.release_update_cache_dir / "artifacts"
+
+    @property
+    def release_update_state_path(self) -> Path:
+        """Private provenance state for a verified local release-wheel install."""
+
+        return self.state / "updates" / "v1" / "managed-install.json"
+
 
 @dataclass(frozen=True)
 class AppPaths:

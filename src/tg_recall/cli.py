@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .agent_routing import build_agent_guide
+from .agent_routing import HarnessTarget, build_agent_guide
 from .assistant import ArchiveAssistant, expand_cited_sources, knowledge_catalog_lookup, local_embedding_provider
 from .backup import create_backup, restore_backup
 from .config import AppConfig, load_config, redact_config, save_config, set_config_value
@@ -17,10 +20,20 @@ from .media import MediaDownloader, MediaStore, copy_file_download
 from .migration import migrate_legacy
 from .models import SearchFilters
 from .hybrid_retrieval import RetrievalMode, SemanticUnavailableError
+from .harness_integrations import (
+    ALL_HARNESSES,
+    IntegrationAction,
+    IntegrationLocations,
+    harness_capabilities,
+    run_harness_lifecycle,
+)
+from .integration_files import IntegrationFileError, IntegrationScope, IntegrationStatus, ensure_integration_directory
 from .knowledge_catalog import KnowledgeScope, ResearchCheckpoint, ResearchSession, VersionMap, plan_evidence_reuse
+from .lifecycle_settings import UpdateCheckSettings, UpdateSettingsStore
 from .security import (
     AgentOperation,
     AgentPolicyError,
+    PolicyDecision,
     RequestedAgentScope,
     audit_policy_decision,
     check_path_private,
@@ -29,10 +42,22 @@ from .security import (
     require_agent_policy,
     require_human_confirmation,
 )
+from .paths import AppRoots
+from .release_updates import (
+    UPDATE_SCHEMA_VERSION,
+    GitHubReleaseChecker,
+    ReleaseCache,
+    ReleaseTransportError,
+    ReleaseUpdateError,
+    apply_verified_wheel,
+    detect_installation_provenance,
+    stage_verified_wheel,
+)
 from .storage import Database, SchemaCompatibilityError
 from .telegram_client import TelegramArchiveClient, run_async
 from .transcription import TranscriptionService, WhisperCLIProvider
 from .wiki_memory import AuthorizedWikiScope, WikiMemoryStore
+from .versioning import runtime_package_version
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,8 +68,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
     try:
-        args._agent_policy = _enforce_agent_command(args)
-        return args.handler(args)
+        if _is_lifecycle_command(args):
+            _enforce_lifecycle_human()
+            args._agent_policy = None
+        else:
+            args._agent_policy = _enforce_agent_command(args)
+        exit_code = args.handler(args)
+        _maybe_emit_periodic_update_notice(args, exit_code)
+        return exit_code
     except AgentPolicyError as exc:
         if getattr(args, "json", False):
             print(json.dumps({"ok": False, "error": {"code": exc.error_code, "message": str(exc), "details": exc.details}}))
@@ -107,6 +138,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = sub.add_parser("doctor", help="Inspect local archive, providers and file protection")
     doctor.set_defaults(handler=cmd_doctor)
+
+    update = sub.add_parser("update", help="Human-only tg-recall release updates")
+    update_sub = update.add_subparsers(dest="update_command", required=True)
+    update_check = update_sub.add_parser("check", help="Explicitly check the fixed GitHub Release endpoint")
+    update_check.add_argument("--refresh", action="store_true", help="Ignore a fresh cached release result")
+    update_check.add_argument("--offline", action="store_true", help="Use cached public release metadata only")
+    update_check.set_defaults(handler=cmd_update_check)
+    update_status = update_sub.add_parser("status", help="Inspect cached release and installation provenance without network access")
+    update_status.set_defaults(handler=cmd_update_status)
+    update_configure = update_sub.add_parser("configure", help="Opt in to or disable periodic interactive update notices")
+    configure_group = update_configure.add_mutually_exclusive_group(required=True)
+    configure_group.add_argument("--interval-hours", type=int, help="Enable periodic checks at this interval (1..720 hours)")
+    configure_group.add_argument("--disable", action="store_true", help="Disable periodic update checks")
+    update_configure.set_defaults(handler=cmd_update_configure)
+    update_apply = update_sub.add_parser("apply", help="Apply a verified release wheel for supported uv tool installs")
+    update_apply.add_argument("--refresh", action="store_true", help="Refresh release metadata before applying")
+    update_apply.set_defaults(handler=cmd_update_apply)
+
+    integrate = sub.add_parser("integrate", help="Human-only AI harness integration lifecycle")
+    integrate_sub = integrate.add_subparsers(dest="integration_command", required=True)
+    integrate_list = integrate_sub.add_parser("list", help="List documented harness capabilities")
+    integrate_list.set_defaults(handler=cmd_integrate_list)
+    for action in IntegrationAction:
+        command = integrate_sub.add_parser(action.value, help=f"{action.value.capitalize()} explicit harness integration files")
+        command.add_argument("--target", action="append", required=True, choices=[*HarnessTarget, ALL_HARNESSES])
+        command.add_argument("--scope", required=True, choices=[scope.value for scope in IntegrationScope])
+        command.add_argument("--project-root", help="Required explicit project root for --scope project")
+        command.add_argument("--generic-output-root", help="Explicit output root required for target generic or all")
+        command.add_argument("--generic-instructions", help="Explicit generic instruction destination below --generic-output-root")
+        command.add_argument("--generic-mcp", help="Explicit generic MCP destination below --generic-output-root")
+        command.set_defaults(handler=cmd_integrate)
 
     security = sub.add_parser("security", help="Inspect and harden local data protection")
     security_sub = security.add_subparsers(dest="security_command")
@@ -399,6 +461,46 @@ def services(args: argparse.Namespace) -> tuple[AppConfig, Database]:
     return cfg, db
 
 
+def _is_lifecycle_command(args: argparse.Namespace) -> bool:
+    """Keep future integration handlers behind the same pre-config boundary."""
+
+    return args.command in {"update", "integrate"}
+
+
+def _enforce_lifecycle_human() -> None:
+    """Reject lifecycle namespaces before config, harness, network, or SQLite I/O."""
+
+    if is_automation_shell():
+        raise AgentPolicyError(
+            PolicyDecision(
+                operation=AgentOperation.HUMAN_ONLY,
+                allowed=False,
+                error_code="agent_operation_forbidden",
+                message="update and integration lifecycle commands are not available to automation",
+                details={"operation": "human_only"},
+            )
+        )
+
+
+def _maybe_emit_periodic_update_notice(args: argparse.Namespace, exit_code: int) -> None:
+    """Best-effort, opt-in notice; it never changes the requested command result."""
+
+    if exit_code != 0 or args.json or _is_lifecycle_command(args) or is_automation_shell():
+        return
+    try:
+        roots = _app_roots(args)
+        settings = UpdateSettingsStore(roots).load()
+        if not settings.enabled:
+            return
+        result = GitHubReleaseChecker(
+            ReleaseCache(roots), cache_ttl=timedelta(hours=settings.interval_hours)
+        ).check(runtime_package_version())
+        if result.status == "update_available" and result.release is not None:
+            print(f"notice: tg-recall {result.release.version} is available; run `tg-recall update check`.", file=sys.stderr)
+    except Exception:
+        return
+
+
 def _enforce_agent_command(args: argparse.Namespace):
     """Apply the one operation table before a handler opens Telegram or writes data."""
 
@@ -428,7 +530,7 @@ def _agent_operation_and_scope(args: argparse.Namespace) -> tuple[AgentOperation
     command = args.command
     if command == "agent":
         return AgentOperation.AGENT_GUIDE, RequestedAgentScope()
-    if command in {"config", "setup", "purge", "backup", "migrate", "index"}:
+    if command in {"config", "setup", "purge", "backup", "migrate", "index", "update", "integrate"}:
         return AgentOperation.HUMAN_ONLY, RequestedAgentScope()
     if command == "telegram":
         return AgentOperation.HUMAN_ONLY, RequestedAgentScope()
@@ -560,6 +662,286 @@ def emit(args: argparse.Namespace, value: Any, plain: str | None = None) -> int:
     else:
         print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
     return 0
+
+
+def cmd_update_check(args: argparse.Namespace) -> int:
+    cache = _release_cache(args)
+    result = GitHubReleaseChecker(cache).check(runtime_package_version(), refresh=args.refresh, offline=args.offline)
+    payload = _update_payload("check", result.status, check=result)
+    plain = _update_plain_summary(payload)
+    return _emit_update(args, payload, plain=plain, exit_code=0 if result.status in {"current", "update_available"} else 1)
+
+
+def cmd_update_status(args: argparse.Namespace) -> int:
+    cache = _release_cache(args)
+    result = GitHubReleaseChecker(cache).check(runtime_package_version(), offline=True)
+    provenance = detect_installation_provenance(release_cache=cache)
+    settings = UpdateSettingsStore(_app_roots(args)).load()
+    payload = _update_payload("status", result.status, check=result, provenance=provenance, settings=settings)
+    return _emit_update(args, payload, plain=_update_plain_summary(payload), exit_code=0)
+
+
+def cmd_update_configure(args: argparse.Namespace) -> int:
+    store = UpdateSettingsStore(_app_roots(args))
+    current = store.load()
+    settings = UpdateCheckSettings(enabled=False, interval_hours=current.interval_hours) if args.disable else UpdateCheckSettings(enabled=True, interval_hours=args.interval_hours)
+    store.save(settings)
+    status = "disabled" if args.disable else "configured"
+    payload = _update_payload("configure", status, settings=settings)
+    return _emit_update(args, payload, plain=_update_plain_summary(payload))
+
+
+def cmd_update_apply(args: argparse.Namespace) -> int:
+    cache = _release_cache(args)
+    check = GitHubReleaseChecker(cache).check(runtime_package_version(), refresh=args.refresh)
+    provenance = detect_installation_provenance(release_cache=cache)
+    if check.status != "update_available" or check.release is None:
+        payload = _update_payload(
+            "apply",
+            check.status,
+            check=check,
+            provenance=provenance,
+            warnings=("No newer verified release is available to apply.",),
+        )
+        return _emit_update(args, payload, plain=_update_plain_summary(payload), exit_code=0 if check.status == "current" else 1)
+    if not provenance.supported_for_apply:
+        payload = _update_payload(
+            "apply",
+            "manual_required",
+            check=check,
+            provenance=provenance,
+            warnings=("This installation source cannot be updated in place.",),
+            next_actions=provenance.manual_action,
+        )
+        return _emit_update(args, payload, plain=_update_plain_summary(payload), exit_code=1)
+    try:
+        artifact = stage_verified_wheel(cache, check.release, _download_release_wheel)
+    except (ReleaseTransportError, ReleaseUpdateError, OSError) as exc:
+        payload = _update_payload(
+            "apply",
+            "verification_failed",
+            check=check,
+            provenance=provenance,
+            warnings=(f"Verified wheel staging failed: {type(exc).__name__}.",),
+            error_code="wheel_staging_failed",
+        )
+        return _emit_update(args, payload, plain=_update_plain_summary(payload), exit_code=1)
+    applied = apply_verified_wheel(provenance, check.release, artifact, release_cache=cache)
+    payload = _update_payload(
+        "apply",
+        applied.status,
+        check=check,
+        provenance=provenance,
+        warnings=((f"Update error: {applied.error_code}.",) if applied.error_code else ()),
+        next_actions=(("Run tg-recall integrate refresh after a successful update.",) if applied.status == "applied" else applied.manual_action),
+        error_code=applied.error_code,
+    )
+    return _emit_update(args, payload, plain=_update_plain_summary(payload), exit_code=0 if applied.status == "applied" else 1)
+
+
+def _app_roots(args: argparse.Namespace) -> AppRoots:
+    return AppRoots.resolve(args.home)
+
+
+def _release_cache(args: argparse.Namespace) -> ReleaseCache:
+    return ReleaseCache(_app_roots(args))
+
+
+def _update_payload(
+    action: str,
+    status: str,
+    *,
+    check: Any | None = None,
+    provenance: Any | None = None,
+    settings: UpdateCheckSettings | None = None,
+    warnings: tuple[str, ...] = (),
+    next_actions: tuple[str, ...] = (),
+    error_code: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": UPDATE_SCHEMA_VERSION,
+        "action": action,
+        "status": status,
+        "installed_version": runtime_package_version(),
+        "release": check.release.as_json() if check and check.release else None,
+        "provenance": provenance.as_json() if provenance else None,
+        "update_checks": settings.as_json() if settings else None,
+        "cache_status": check.cache_status if check else None,
+        "network_attempted": check.network_attempted if check else False,
+        "error_code": error_code or (check.error_code if check else None),
+        "changed_paths": [],
+        "warnings": list(warnings),
+        "next_actions": list(next_actions),
+    }
+
+
+def _update_plain_summary(payload: dict[str, Any]) -> str:
+    action = payload["action"]
+    status = payload["status"]
+    release = payload["release"]
+    version = release["version"] if release else None
+    detail = f" latest={version}" if version else ""
+    return f"Update {action}: {status}.{detail}"
+
+
+def _emit_update(args: argparse.Namespace, payload: dict[str, Any], *, plain: str, exit_code: int = 0) -> int:
+    emit(args, payload, plain=plain)
+    return exit_code
+
+
+class _RejectRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
+
+
+def _download_release_wheel(url: str, maximum: int) -> bytes:
+    """Fetch the already-validated fixed GitHub wheel URL without redirects."""
+
+    request = Request(url, headers={"User-Agent": "tg-recall-release-update"}, method="GET")
+    try:
+        with build_opener(_RejectRedirect()).open(request, timeout=10) as response:
+            length = response.headers.get("Content-Length")
+            if length is not None and int(length) > maximum:
+                raise ReleaseTransportError("wheel response exceeds the configured size limit")
+            payload = response.read(maximum + 1)
+            if len(payload) > maximum:
+                raise ReleaseTransportError("wheel response exceeds the configured size limit")
+            return payload
+    except ValueError as exc:
+        raise ReleaseTransportError("wheel response has an invalid content length") from exc
+    except (HTTPError, URLError, OSError) as exc:
+        raise ReleaseTransportError("wheel download failed") from exc
+
+
+def cmd_integrate_list(args: argparse.Namespace) -> int:
+    payload = {
+        "schema_version": 1,
+        "action": "list",
+        "status": "available",
+        "installed_version": runtime_package_version(),
+        "requested_harnesses": [],
+        "scope": None,
+        "components": [],
+        "harnesses": [item.as_json() for item in harness_capabilities()],
+        "changed_paths": [],
+        "backup_paths": [],
+        "conflicts": [],
+        "warnings": [],
+        "manual_actions": [],
+        "next_actions": [],
+    }
+    return emit(args, payload, plain="Integration capabilities: codex, claude-code, cursor, generic.")
+
+
+def cmd_integrate(args: argparse.Namespace) -> int:
+    action = IntegrationAction(args.integration_command)
+    targets = tuple(args.target)
+    scope = IntegrationScope(args.scope)
+    try:
+        locations = _integration_locations(args, action=action, targets=targets, scope=scope)
+        result = run_harness_lifecycle(action, targets, scope, build_agent_guide(), locations=locations).as_json()
+    except (IntegrationFileError, OSError, ValueError) as exc:
+        result = _integration_error_payload(action, targets, scope, str(exc))
+    return emit(
+        args,
+        result,
+        plain=f"Integration {result['action']}: {result['status']}.",
+    ) if result["status"] in {IntegrationStatus.INSTALLED.value, IntegrationStatus.UPDATED.value, IntegrationStatus.UNCHANGED.value} else _emit_integration_error(args, result)
+
+
+def _emit_integration_error(args: argparse.Namespace, payload: dict[str, Any]) -> int:
+    emit(args, payload, plain=f"Integration {payload['action']}: {payload['status']}.")
+    return 1
+
+
+def _integration_locations(
+    args: argparse.Namespace,
+    *,
+    action: IntegrationAction,
+    targets: tuple[str, ...],
+    scope: IntegrationScope,
+) -> IntegrationLocations:
+    project_root: Path | None = None
+    user_home: Path | None = None
+    if scope is IntegrationScope.PROJECT:
+        if not args.project_root:
+            raise ValueError("--project-root is required for --scope project")
+        project_root = _lexical_absolute_path(args.project_root)
+        if not project_root.is_dir():
+            raise ValueError("--project-root must be an existing directory")
+    else:
+        user_home = _lexical_absolute_path(Path.home())
+        if not user_home.is_dir():
+            raise ValueError("user home is not an existing directory")
+
+    selected = set(targets)
+    # ``all`` deliberately expands to the documented harnesses only. Generic
+    # integration always needs explicitly supplied destinations, so require
+    # them only when the caller selected it directly.
+    generic_selected = HarnessTarget.GENERIC.value in selected
+    generic_root: Path | None = None
+    generic_instruction_target: Path | None = None
+    generic_mcp_target: Path | None = None
+    if generic_selected:
+        if not args.generic_output_root or not args.generic_instructions or not args.generic_mcp:
+            raise ValueError("generic integration requires --generic-output-root, --generic-instructions, and --generic-mcp")
+        generic_root = _lexical_absolute_path(args.generic_output_root)
+        if not generic_root.is_dir():
+            raise ValueError("--generic-output-root must be an existing directory")
+        generic_instruction_target = Path(args.generic_instructions)
+        generic_mcp_target = Path(args.generic_mcp)
+
+    mutation = action in {IntegrationAction.INSTALL, IntegrationAction.REFRESH, IntegrationAction.UNINSTALL}
+    state_root = _integration_state_root(args, create=mutation)
+    return IntegrationLocations(
+        project_root=project_root,
+        user_home=user_home,
+        generic_root=generic_root,
+        generic_instruction_target=generic_instruction_target,
+        generic_mcp_target=generic_mcp_target,
+        state_root=state_root,
+    )
+
+
+def _lexical_absolute_path(value: str | Path) -> Path:
+    """Normalize ``.``/``..`` without resolving a selected symlink root."""
+
+    return Path(os.path.abspath(os.path.expanduser(os.fspath(value))))
+
+
+def _integration_state_root(args: argparse.Namespace, *, create: bool) -> Path | None:
+    root = _app_roots(args).state
+    candidate = root / "integrations" / "v1"
+    if not create:
+        return candidate if candidate.is_dir() else None
+    root.mkdir(parents=True, exist_ok=True)
+    privacy = harden_path(root, is_dir=True)
+    if privacy.status != "ok":
+        raise OSError(f"could not restrict integration state root: {privacy.detail}")
+    return ensure_integration_directory(Path("integrations") / "v1", root=root, apply=True).path
+
+
+def _integration_error_payload(
+    action: IntegrationAction,
+    targets: tuple[str, ...],
+    scope: IntegrationScope,
+    detail: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "action": action.value,
+        "status": IntegrationStatus.CONFLICT.value,
+        "installed_version": runtime_package_version(),
+        "requested_harnesses": sorted(targets),
+        "scope": scope.value,
+        "components": [],
+        "changed_paths": [],
+        "backup_paths": [],
+        "conflicts": [detail],
+        "warnings": [],
+        "manual_actions": [],
+        "next_actions": [],
+    }
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
@@ -1396,7 +1778,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def cmd_agent_guide(args: argparse.Namespace) -> int:
     cfg = load_config(args.config, home=args.home, profile=args.profile)
     db = Database(cfg.db_path)
-    guide = build_agent_guide("0.2.0")
+    guide = build_agent_guide()
     text = guide.human_prompt()
     health = db.health() if Path(cfg.db_path).exists() else {"available": False}
     return emit(args, {"profile": cfg.profile, "health": health, "guide": text, "agent_guide": guide.as_json()}, plain=text)
