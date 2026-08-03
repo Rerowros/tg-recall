@@ -1,5 +1,7 @@
 # Contributing
 
+[English](CONTRIBUTING.md) | [Русский](CONTRIBUTING.ru.md)
+
 ## Local Setup
 
 ```powershell

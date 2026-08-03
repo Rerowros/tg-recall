@@ -1,5 +1,7 @@
 # Private Wiki Memory: Query First, Verify Raw Evidence
 
+**English canonical** | [Русский](wiki-memory.ru.md)
+
 Wiki memory is a local derived layer for repeated Telegram research. It is not
 an external knowledge service, does not publish content, and does not replace
 the raw archive. Telegram messages and transcripts remain authoritative.

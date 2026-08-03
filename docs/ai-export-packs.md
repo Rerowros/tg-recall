@@ -1,5 +1,7 @@
 # Private AI Export Packs
 
+**English canonical** | [Русский](ai-export-packs.ru.md)
+
 An AI export pack is a bounded, immutable directory handoff for already
 authorized evidence. It is designed for a local AI workflow or offline review,
 not for automatic whole-archive export, cloud publication, or backup/restore.
@@ -87,10 +89,10 @@ The additive CLI namespace is `tg-recall pack`; the existing `tg-recall export`
 JSONL workflow remains separate and compatible:
 
 ```powershell
-tg-recall pack create project-a --chat -1001234567890 --since 2026-01-01 --max-records 200 --token-budget 12000 --json
-tg-recall pack create project-a-wiki --scope project-a --max-records 200 --token-budget 12000 --wiki-revision REVISION_ID --json
-tg-recall pack inspect PATH\TO\project-a --json
-tg-recall pack verify PATH\TO\project-a --max-wiki-age-seconds 604800 --json
+tg-recall --json pack create project-a --chat -1001234567890 --since 2026-01-01 --max-records 200 --token-budget 12000
+tg-recall --json pack create project-a-wiki --scope project-a --max-records 200 --token-budget 12000 --wiki-revision REVISION_ID
+tg-recall --json pack inspect PATH\TO\project-a
+tg-recall --json pack verify PATH\TO\project-a --max-wiki-age-seconds 604800
 ```
 
 `create` obtains raw evidence through bounded SQLite filters. Wiki content is

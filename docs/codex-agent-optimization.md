@@ -29,7 +29,7 @@
 ## Бюджет контекста и turns
 
 Не отправляйте чат целиком. Начинайте с уже возвращённого evidence и текущего
-`tg-recall agent guide --json`: в v0.5.0 доступны profile-local knowledge
+`tg-recall --json agent guide`: в v0.5.0 доступны profile-local knowledge
 catalog и research-session inspect/resume; cited synthesized wiki lookup пока
 не доступен. Summary/catalog нужны для навигации, а существенные Telegram
 claims всё равно подтверждаются `tg://` источником.
@@ -37,13 +37,13 @@ claims всё равно подтверждаются `tg://` источнико
 1. Выполните один узкий retrieval.
 
    ```powershell
-   tg-recall retrieve --chat-id CHAT_ID --query "QUERY" --limit 8 --context 2 --token-budget 4000 --json
+   tg-recall --json retrieve --chat-id CHAT_ID --query "QUERY" --limit 8 --context 2 --token-budget 4000
    ```
 
 2. Если доказательств не хватает, расширьте запрос не более одного раза.
 
    ```powershell
-   tg-recall retrieve --chat-id CHAT_ID --query "QUERY" --limit 16 --context 5 --token-budget 8000 --json
+   tg-recall --json retrieve --chat-id CHAT_ID --query "QUERY" --limit 16 --context 5 --token-budget 8000
    ```
 
 3. Для явно разрешённого, но отсутствующего source используйте `tg-recall sync

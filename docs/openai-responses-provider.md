@@ -1,5 +1,7 @@
 # OpenAI Responses provider: data boundary
 
+**English canonical** | [Русский](openai-responses-provider.ru.md)
+
 `tg-recall` remains local and extractive by default. The optional `openai-responses` adapter is used only after the existing synthesis policy accepts an explicit provider, model, credentials, allowed scope, data classes, evidence-item limit, and token budget.
 
 ## What crosses the boundary

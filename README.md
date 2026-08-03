@@ -1,5 +1,7 @@
 # tg-recall
 
+[English](README.md) | [Русский](README.ru.md)
+
 Local-first Telegram archive for people and AI agents. `tg-recall` stores only explicitly selected chats in a local profile, indexes message text and transcripts, and returns source citations such as `tg://chat/.../message/...`.
 
 > Early alpha (current release: v0.5.0). The archive includes private conversations and a Telegram user session. Keep the profile local, use full-disk encryption, and verify important findings against Telegram.
@@ -22,7 +24,7 @@ asset digest is integrity metadata, not a package signature.
 
 ```powershell
 uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.5.0/tg_recall-0.5.0-py3-none-any.whl
-tg-recall doctor --json
+tg-recall --json doctor
 ```
 
 `uv tool install --editable .` is for development only. It deliberately keeps
@@ -38,6 +40,29 @@ non-JSON CLI command make a best-effort check; help, MCP, automation, lifecycle
 commands and JSON commands never do so. See
 [harness integration](docs/harness-integration.md) for `update` / `integrate`
 usage, scope support, backups, and manual fallbacks.
+
+## Stable AI-harness bootstrap
+
+To have Codex, Claude Code, Cursor, or another agent prepare a safe harness
+setup plan, copy this exact instruction:
+
+```text
+Fetch https://raw.githubusercontent.com/Rerowros/tg-recall/main/docs/agent-setup/prompt.md and follow it.
+```
+
+The link is permanent and intentionally has no release version. The fetched
+contract resolves the latest stable GitHub Release and an exact universal wheel
+with its GitHub SHA-256 digest; it never installs from `main`. An agent may use
+only `integrate list`, `integrate preview`, and `integrate status` as data-blind
+diagnostics. Package installation and every `integrate install`, `refresh`, or
+`uninstall` operation remain an explicit human command: the agent prints it
+and stops. It requires an explicit `user` or `project` scope (and an explicit
+project root for the latter), preserves manual/partial actions, and tells the
+user to restart the affected harness before `status` verification.
+
+The current published release can predate this contract. If its `integrate
+list` command is unavailable, setup stops with a capability-gap message; it
+must not use a checkout or source from `main` as a fallback.
 
 `tg-ecosystem` and `tg-ecosystem-mcp` are deprecated compatibility aliases. Use `tg-recall` and `tg-recall-mcp` in new scripts; the aliases may be removed in a future breaking release.
 
@@ -90,10 +115,17 @@ tg-recall sync run work --backfill --limit 500
 For a single idempotent workflow:
 
 ```powershell
-tg-recall sync ensure work --chat -1001234567890 --since 2026-01-01 --media voice,photo --transcribe auto --limit 500 --json
+tg-recall --json sync ensure work --chat -1001234567890 --since 2026-01-01 --media voice,photo --transcribe auto --limit 500
 ```
 
-`transcribe auto` tries Telegram transcription first and falls back to local Whisper. `tg-recall doctor --json` checks the current archive, Telegram session, `ffmpeg` and the `whisper` executable.
+`transcribe auto` tries Telegram transcription first and falls back to local Whisper. `tg-recall --json doctor` checks the current archive, Telegram session, `ffmpeg` and the `whisper` executable.
+
+## Local transcription
+
+`transcribe run` defaults to `sidecar`; `telegram` uses Telegram, `local` uses
+the selected local adapter, and `auto` remains Telegram-first. For typed,
+human-only local backend settings, safe short-voice/long-audio VAD presets,
+and one-citation verification, see [local transcription](docs/local-transcription.md).
 
 ## Agent Workflow
 
@@ -106,7 +138,7 @@ tg-recall agent guide
 For bounded cited evidence:
 
 ```powershell
-tg-recall retrieve --chat-id -1001234567890 --query "deadline" --context 8 --token-budget 12000 --json
+tg-recall --json retrieve --chat-id -1001234567890 --query "deadline" --context 8 --token-budget 12000
 ```
 
 For a long-chat analysis, write a private JSONL export below the profile instead of printing the entire archive:
@@ -120,9 +152,9 @@ The CLI can sync, download and transcribe local archives. It does not expose age
 For a bounded, offline-verifiable handoff to a local AI workflow, create a separate pack; the existing `export` JSONL command is unchanged:
 
 ```powershell
-tg-recall pack create project-a --chat -1001234567890 --since 2026-01-01 --max-records 200 --token-budget 12000 --json
-tg-recall pack inspect PATH\TO\project-a --json
-tg-recall pack verify PATH\TO\project-a --json
+tg-recall --json pack create project-a --chat -1001234567890 --since 2026-01-01 --max-records 200 --token-budget 12000
+tg-recall --json pack inspect PATH\TO\project-a
+tg-recall --json pack verify PATH\TO\project-a
 ```
 
 `pack create` requires either a concrete chat plus a date boundary or a saved scope, and always requires positive record and token budgets. It writes under the selected profile's private `exports` directory by default. A human may explicitly pass `--output`; automation cannot. To include synthesized local knowledge, pass only explicit immutable `--wiki-revision` IDs (and `--wiki-scope` when it differs from the saved scope). Packs contain selected evidence and structured assertions, never sessions, credentials, media binaries, or absolute host paths.
@@ -158,9 +190,9 @@ For optional genuine local-vector retrieval, first configure an already-download
 
 ```powershell
 uv sync --extra local-embeddings
-tg-recall index embeddings build --chat-id -1001234567890 --max-batches 1 --json
-tg-recall index embeddings status --chat-id -1001234567890 --json
-tg-recall retrieve "deadline" --chat-id -1001234567890 --retrieval-mode auto --token-budget 8000 --json
+tg-recall --json index embeddings build --chat-id -1001234567890 --max-batches 1
+tg-recall --json index embeddings status --chat-id -1001234567890
+tg-recall --json retrieve "deadline" --chat-id -1001234567890 --retrieval-mode auto --token-budget 8000
 ```
 
 The model path must already exist locally; tg-recall never downloads a model. `auto` reports a keyword fallback when vectors are unavailable or stale. `semantic` is strict and returns `semantic_unavailable` rather than relabeling token overlap as vectors. `index embeddings rebuild` and `remove` are explicit human-only maintenance commands; MCP exposes only bounded `retrieve_evidence` and never builds, rebuilds, or removes an index.

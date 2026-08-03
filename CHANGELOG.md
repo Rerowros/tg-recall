@@ -1,5 +1,7 @@
 # Changelog
 
+[English](CHANGELOG.md) | [Русский](CHANGELOG.ru.md)
+
 ## v0.5.0 - 2026-08-03
 
 - Harden agent and MCP scope enforcement, preserve monotonic sync/backfill watermarks, and keep `FLOOD_WAIT` recovery resumable.

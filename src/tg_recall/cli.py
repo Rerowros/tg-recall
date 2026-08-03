@@ -55,7 +55,7 @@ from .release_updates import (
 )
 from .storage import Database, SchemaCompatibilityError
 from .telegram_client import TelegramArchiveClient, run_async
-from .transcription import TranscriptionService, WhisperCLIProvider
+from .transcription import FasterWhisperXXLProvider, TranscriptionService, WhisperCLIProvider
 from .wiki_memory import AuthorizedWikiScope, WikiMemoryStore
 from .versioning import runtime_package_version
 
@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         if _is_lifecycle_command(args):
-            _enforce_lifecycle_human()
+            _enforce_lifecycle_human(args)
             args._agent_policy = None
         else:
             args._agent_policy = _enforce_agent_command(args)
@@ -156,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     update_apply.add_argument("--refresh", action="store_true", help="Refresh release metadata before applying")
     update_apply.set_defaults(handler=cmd_update_apply)
 
-    integrate = sub.add_parser("integrate", help="Human-only AI harness integration lifecycle")
+    integrate = sub.add_parser("integrate", help="AI harness integration lifecycle")
     integrate_sub = integrate.add_subparsers(dest="integration_command", required=True)
     integrate_list = integrate_sub.add_parser("list", help="List documented harness capabilities")
     integrate_list.set_defaults(handler=cmd_integrate_list)
@@ -467,10 +467,16 @@ def _is_lifecycle_command(args: argparse.Namespace) -> bool:
     return args.command in {"update", "integrate"}
 
 
-def _enforce_lifecycle_human() -> None:
-    """Reject lifecycle namespaces before config, harness, network, or SQLite I/O."""
+def _is_read_only_integration_discovery(args: argparse.Namespace) -> bool:
+    """Return whether an integration command is safe before any profile I/O."""
 
-    if is_automation_shell():
+    return args.command == "integrate" and args.integration_command in {"list", "preview", "status"}
+
+
+def _enforce_lifecycle_human(args: argparse.Namespace) -> None:
+    """Keep lifecycle writes and updates outside automation before any I/O."""
+
+    if is_automation_shell() and not _is_read_only_integration_discovery(args):
         raise AgentPolicyError(
             PolicyDecision(
                 operation=AgentOperation.HUMAN_ONLY,
@@ -1761,6 +1767,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "archive": db.health(),
         "maintenance": db.diagnostics(),
         "providers": {"ffmpeg": shutil.which("ffmpeg") is not None, "whisper": WhisperCLIProvider.available()},
+        "local_transcription": _local_transcription_diagnostics(cfg),
         "session_present": Path(cfg.telegram.session_path).exists(),
         "free_bytes": shutil.disk_usage(Path(cfg.data_dir)).free,
     }
@@ -1805,8 +1812,102 @@ def _run_transcription_policy(
 
 def _run_local_whisper(cfg: AppConfig, db: Database, limit: int, media_ids: set[int] | None = None) -> dict[str, int]:
     store = MediaStore(cfg.media_dir, Path(cfg.cache_dir) / "downloads")
-    provider = WhisperCLIProvider(Path(cfg.cache_dir) / "transcription")
-    return TranscriptionService(db, fallback_provider=provider, media_store=store, cache_dir=Path(cfg.cache_dir) / "extracted-audio").run_pending(limit=limit, media_ids=media_ids)
+    provider = _local_transcription_provider(cfg)
+    return TranscriptionService(
+        db, fallback_provider=provider, media_store=store, cache_dir=Path(cfg.cache_dir) / "extracted-audio"
+    ).run_pending(limit=limit, media_ids=media_ids)
+
+
+def _local_transcription_provider(cfg: AppConfig) -> WhisperCLIProvider | FasterWhisperXXLProvider:
+    """Build the profile-selected local provider without accepting shell syntax."""
+
+    settings = cfg.transcription
+    output_dir = Path(cfg.cache_dir) / "transcription"
+    if settings.backend == "whisper-cli":
+        return WhisperCLIProvider(
+            output_dir,
+            executable=settings.executable,
+            model=settings.model,
+            language=settings.language,
+            device=settings.device,
+            compute_type=settings.compute_type,
+            vad_filter=settings.vad_filter,
+            timeout_seconds=settings.timeout_seconds,
+        )
+    if settings.backend == "faster-whisper-xxl":
+        if settings.model is None:
+            raise RuntimeError("Faster-Whisper-XXL requires transcription.model")
+        return FasterWhisperXXLProvider(
+            output_dir,
+            executable=settings.executable,
+            model=settings.model,
+            model_dir=settings.model_dir,
+            language=settings.language,
+            device=settings.device,
+            compute_type=settings.compute_type,
+            vad_filter=settings.vad_filter,
+            timeout_seconds=settings.timeout_seconds,
+        )
+    raise RuntimeError("Unsupported configured local transcription backend")
+
+
+def _local_transcription_diagnostics(cfg: AppConfig) -> dict[str, Any]:
+    """Report provider readiness without exposing configured host paths."""
+
+    settings = cfg.transcription
+    default_executable = "whisper" if settings.backend == "whisper-cli" else "faster-whisper-xxl"
+    configured = settings.executable
+    executable_name = _sanitized_executable_name(configured) if configured else default_executable
+    resolved_executable = _diagnostic_executable_path(configured, default_executable)
+    model_available: bool | None = None
+    if settings.backend == "faster-whisper-xxl":
+        if settings.model is not None and resolved_executable is not None:
+            root = (
+                Path(settings.model_dir).expanduser() if settings.model_dir else resolved_executable.parent / "_models"
+            )
+            model_available = (root / f"faster-whisper-{settings.model}").is_dir()
+        else:
+            model_available = False
+    try:
+        _local_transcription_provider(cfg)
+        options_valid = True
+    except (RuntimeError, ValueError):
+        options_valid = False
+    ready = bool(resolved_executable) and model_available is not False and options_valid
+    return {
+        "backend": settings.backend,
+        "executable": {
+            "name": executable_name,
+            "configured": configured is not None,
+            "resolved": resolved_executable is not None,
+        },
+        "model": {
+            "name": settings.model,
+            "configured": settings.model is not None,
+            "local_available": model_available,
+        },
+        "options_valid": options_valid,
+        "ready": ready,
+    }
+
+
+def _diagnostic_executable_path(configured: str | None, default_name: str) -> Path | None:
+    """Resolve only for booleans; callers must never serialize the returned path."""
+
+    if configured:
+        candidate = Path(configured).expanduser()
+        if candidate.is_file():
+            return candidate.resolve()
+        resolved = shutil.which(configured)
+    else:
+        resolved = shutil.which(default_name)
+    return Path(resolved).resolve() if resolved else None
+
+
+def _sanitized_executable_name(configured: str) -> str:
+    """Return a basename for either Windows or POSIX-style configured paths."""
+
+    return configured.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
 
 
 def _filters_from_args(args: argparse.Namespace, policy: Any | None = None) -> SearchFilters:

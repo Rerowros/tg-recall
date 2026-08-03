@@ -1,10 +1,36 @@
 # Обновления и подключение AI-harness
 
-`update` и `integrate` — явные операции человека. Они не запускаются после
-обычной команды, после установки пакета или по умолчанию в фоне. В AI, CI и
-automation-shell эти команды, включая `check`, `status`, `preview` и `list`,
-отклоняются до чтения профиля, Telegram-данных, файлов harness или сети.
+`update` и изменяющие `integrate` операции — явные операции человека. Они не
+запускаются после обычной команды, после установки пакета или по умолчанию в
+фоне. В AI, CI и automation-shell разрешены только data-blind diagnostics
+`integrate list`, `integrate preview` и `integrate status`; они не читают
+Telegram profile, credentials, session, SQLite, media, wiki или exports и не
+пишут harness files. `integrate install`, `refresh`, `uninstall` и все `update`
+операции отклоняются до конфигурации, harness mutation, сети или subprocess.
 MCP остаётся только для чтения и регистрирует лишь `tg-recall-mcp`.
+
+## Стабильный bootstrap для AI
+
+Скопируйте в Codex, Claude Code, Cursor или другой AI-harness ровно эту
+инструкцию:
+
+```text
+Fetch https://raw.githubusercontent.com/Rerowros/tg-recall/main/docs/agent-setup/prompt.md and follow it.
+```
+
+URL постоянный и не содержит номера Release. Prompt сам получает metadata
+последнего stable GitHub Release, выбирает точный versioned universal wheel и
+GitHub SHA-256 digest, но никогда не запускает installer и не устанавливает
+из `main`. До install/refresh/uninstall агент выдаёт copy-ready HUMAN COMMAND
+и останавливается. Он требует явный `user`/`project` scope (и явный project
+root для project), сохраняет `manual_action`/partial result и после команды
+человека просит перезапустить harness перед `integrate status`.
+
+Если latest Release не предоставляет `integrate list`, это capability gap:
+bootstrap останавливается, а не использует checkout или source из `main`.
+Поддержка несимметрична: Cursor User Rule и Claude Code user MCP могут
+оставаться manual action; generic требует явных destinations. Фактическая
+matrix всегда берётся из `integrate list --json` установленной версии.
 
 ## Release wheel и обновление
 
@@ -49,10 +75,10 @@ automation, lifecycle commands и JSON commands исключены. Неудач
 Сначала посмотрите фактическую capability matrix установленной версии:
 
 ```powershell
-tg-recall integrate list --json
-tg-recall integrate preview --target codex --scope project --project-root C:\code\my-project --json
+tg-recall --json integrate list
+tg-recall --json integrate preview --target codex --scope project --project-root C:\code\my-project
 tg-recall integrate install --target all --scope project --project-root C:\code\my-project
-tg-recall integrate status --target all --scope project --project-root C:\code\my-project --json
+tg-recall --json integrate status --target all --scope project --project-root C:\code\my-project
 ```
 
 `preview` никогда не пишет файлы. `install` добавляет только управляемый

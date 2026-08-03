@@ -1,5 +1,7 @@
 # Security Policy
 
+[English](SECURITY.md) | [Русский](SECURITY.ru.md)
+
 ## Sensitive Data
 
 `tg-recall` handles Telegram user-session files, API credentials, local archive databases, downloaded media, and transcripts. Treat all local state as sensitive.
