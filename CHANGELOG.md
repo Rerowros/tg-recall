@@ -2,6 +2,15 @@
 
 [English](CHANGELOG.md) | [Русский](CHANGELOG.ru.md)
 
+## v0.6.0 - 2026-08-04
+
+- Add a permanent, versionless agent-setup prompt for Codex, Claude Code, Cursor, and generic harnesses, resolving only verified stable GitHub Release wheels.
+- Allow automation to inspect `integrate list`, `preview`, and `status` without profile, archive, session, network, or harness writes; installation and update actions remain human-only.
+- Add profile-local typed transcription settings and a shell-free Faster-Whisper-XXL adapter with explicit local executable/model checks, GPU/compute/VAD controls, bounded timeouts, and sanitized diagnostics.
+- Keep `sidecar` as the transcription default and `auto` Telegram-first; agents still require one permitted explicit `tg://` citation and cannot change configuration.
+- Add complete Russian versions of the main public documentation and synchronized EN/RU local-transcription guidance.
+- Correct documented placement of the global `--json` flag and extend distribution tests so public docs ship while archives, credentials, sessions, media, wiki, and exports remain excluded.
+
 ## v0.5.0 - 2026-08-03
 
 - Harden agent and MCP scope enforcement, preserve monotonic sync/backfill watermarks, and keep `FLOOD_WAIT` recovery resumable.

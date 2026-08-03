@@ -4,7 +4,7 @@
 
 Local-first Telegram archive for people and AI agents. `tg-recall` stores only explicitly selected chats in a local profile, indexes message text and transcripts, and returns source citations such as `tg://chat/.../message/...`.
 
-> Early alpha (current release: v0.5.0). The archive includes private conversations and a Telegram user session. Keep the profile local, use full-disk encryption, and verify important findings against Telegram.
+> Early alpha (current release: v0.6.0). The archive includes private conversations and a Telegram user session. Keep the profile local, use full-disk encryption, and verify important findings against Telegram.
 
 ## Install
 
@@ -23,7 +23,7 @@ when your release process requires an independent integrity check. A GitHub
 asset digest is integrity metadata, not a package signature.
 
 ```powershell
-uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.5.0/tg_recall-0.5.0-py3-none-any.whl
+uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.6.0/tg_recall-0.6.0-py3-none-any.whl
 tg-recall --json doctor
 ```
 

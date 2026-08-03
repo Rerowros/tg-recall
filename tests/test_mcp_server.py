@@ -25,7 +25,7 @@ def test_mcp_initialize_reports_package_release_version(tmp_path) -> None:
     instructions = response["result"]["instructions"]
     guide = build_agent_guide()
 
-    assert __version__ == "0.5.0"
+    assert __version__ == "0.6.0"
     assert response["result"]["serverInfo"] == {"name": "tg-recall", "version": __version__}
     assert guide.tg_recall_version == __version__
     assert f"schema {guide.schema_version}" in instructions
