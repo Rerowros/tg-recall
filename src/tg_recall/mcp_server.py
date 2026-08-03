@@ -5,6 +5,7 @@ import sys
 from dataclasses import asdict
 from typing import Any
 
+from . import __version__
 from .assistant import ArchiveAssistant, expand_cited_sources, knowledge_catalog_lookup
 from .config import AppConfig, load_config
 from .hybrid_retrieval import RetrievalMode, SemanticUnavailableError
@@ -32,7 +33,7 @@ class ReadOnlyMCPServer:
             if method == "initialize":
                 result = {
                     "protocolVersion": "2025-03-26",
-                    "serverInfo": {"name": "tg-recall", "version": "0.2.0"},
+                    "serverInfo": {"name": "tg-recall", "version": __version__},
                     "capabilities": {"tools": {}},
                 }
             elif method == "tools/list":
