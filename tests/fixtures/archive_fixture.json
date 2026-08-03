@@ -1,0 +1,27 @@
+{
+  "chats": [
+    {"chat_id": 10, "title": "Work", "chat_type": "group"}
+  ],
+  "messages": [
+    {
+      "chat_id": 10,
+      "message_id": 100,
+      "date": "2026-01-01T00:00:00+00:00",
+      "text": "Project deadline moved to Monday https://example.com",
+      "sender_id": 7,
+      "sender_name": "Ada",
+      "has_media": false
+    },
+    {
+      "chat_id": 10,
+      "message_id": 101,
+      "date": "2026-01-02T00:00:00+00:00",
+      "text": "Voice note attached",
+      "sender_id": 8,
+      "sender_name": "Grace",
+      "has_media": true,
+      "media_type": "voice"
+    }
+  ],
+  "transcript": "The budget approval deadline is next Monday"
+}

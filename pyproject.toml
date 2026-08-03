@@ -1,0 +1,68 @@
+[project]
+name = "tg-ecosystem"
+version = "0.1.0"
+description = "Local-first Telegram archive with CLI and MCP access for AI agents."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "MIT"
+authors = [
+  { name = "Rerowros" },
+]
+keywords = ["ai-agents", "archive", "mcp", "sqlite", "telegram", "telethon", "transcription"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Chat",
+]
+dependencies = [
+  "telethon>=1.40.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Rerowros/tg-ecosystem"
+Repository = "https://github.com/Rerowros/tg-ecosystem"
+Issues = "https://github.com/Rerowros/tg-ecosystem/issues"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+tg-ecosystem = "tg_ecosystem.cli:main"
+tg-ecosystem-mcp = "tg_ecosystem.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tg_ecosystem"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/tg_ecosystem",
+  "/tests",
+  "/docs",
+  "/README.md",
+  "/LICENSE",
+  "/SECURITY.md",
+  "/CONTRIBUTING.md",
+  "/CHANGELOG.md",
+  "/ROADMAP.md",
+  "/pyproject.toml",
+  "/uv.lock",
+]
+exclude = [
+  "/.codex",
+  "/.tg-ecosystem",
+  "/exports",
+  "/reports",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
