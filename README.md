@@ -15,12 +15,29 @@ uv sync --extra dev
 uv run tg-recall setup
 ```
 
-Install globally for Codex or another agent:
+For normal use, install the published universal wheel from the matching GitHub
+Release. GitHub displays the asset SHA-256 digest; compare it before installing
+when your release process requires an independent integrity check. A GitHub
+asset digest is integrity metadata, not a package signature.
 
 ```powershell
-uv tool install --editable .
+uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.5.0/tg_recall-0.5.0-py3-none-any.whl
 tg-recall doctor --json
 ```
+
+`uv tool install --editable .` is for development only. It deliberately keeps
+the checkout as the source of the command, so `tg-recall update apply` will
+report `manual_required` rather than overwrite that checkout. Update an
+editable development install from its original checkout (`git pull`, `uv sync`
+or the project's documented workflow), or reinstall a verified release wheel.
+
+Self-update and harness installation are explicit human-only lifecycle
+operations; they are never run automatically. Release checks are disabled by
+default. Only after explicit periodic configuration can an eligible interactive
+non-JSON CLI command make a best-effort check; help, MCP, automation, lifecycle
+commands and JSON commands never do so. See
+[harness integration](docs/harness-integration.md) for `update` / `integrate`
+usage, scope support, backups, and manual fallbacks.
 
 `tg-ecosystem` and `tg-ecosystem-mcp` are deprecated compatibility aliases. Use `tg-recall` and `tg-recall-mcp` in new scripts; the aliases may be removed in a future breaking release.
 
@@ -110,7 +127,14 @@ tg-recall pack verify PATH\TO\project-a --json
 
 `pack create` requires either a concrete chat plus a date boundary or a saved scope, and always requires positive record and token budgets. It writes under the selected profile's private `exports` directory by default. A human may explicitly pass `--output`; automation cannot. To include synthesized local knowledge, pass only explicit immutable `--wiki-revision` IDs (and `--wiki-scope` when it differs from the saved scope). Packs contain selected evidence and structured assertions, never sessions, credentials, media binaries, or absolute host paths.
 
-Paste this compact instruction into Codex Custom Instructions:
+Install managed Codex guidance instead of relying on Custom Instructions:
+
+```powershell
+tg-recall integrate install --target codex --scope user
+```
+
+Use this compact text only as a generic/manual fallback when managed harness
+integration is unavailable:
 
 ```text
 Если пользователь просит посмотреть Telegram-чат, используй локальный `tg-recall`: сначала выполни `tg-recall agent guide` и следуй его workflow только для запрошенных чатов. Разрешены sync, media download и transcription; запрещены auth, purge и изменение config. Выводы подтверждай ссылками `tg://`.

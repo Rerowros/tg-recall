@@ -8,9 +8,12 @@ file.  A host passes only the availability facts it already knows.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from enum import StrEnum
+from hashlib import sha256
+from dataclasses import dataclass, field
 from typing import Any
+
+from .versioning import runtime_package_version
 
 
 AGENT_ROUTING_SCHEMA_VERSION = 1
@@ -22,6 +25,15 @@ KNOWLEDGE_SESSION_CAPABILITIES = (
     "bounded cited source expansion",
 )
 PLANNED_KNOWLEDGE_SESSION_CAPABILITIES = ("cited synthesized wiki lookup",)
+
+
+class HarnessTarget(StrEnum):
+    """Instruction syntaxes supported by the integration lifecycle."""
+
+    CODEX = "codex"
+    CLAUDE_CODE = "claude-code"
+    CURSOR = "cursor"
+    GENERIC = "generic"
 
 
 class ModelTarget(StrEnum):
@@ -161,7 +173,7 @@ class AgentGuide:
         return {
             "budgets": self.budgets.as_json(),
             "capabilities": list(self.capabilities),
-            "current_v0_2": {"capabilities": list(self.capabilities), "status": "available"},
+            "current_capabilities": {"capabilities": list(self.capabilities), "status": "available"},
             "knowledge_session": {
                 "capabilities": list(KNOWLEDGE_SESSION_CAPABILITIES),
                 "status": "available",
@@ -189,7 +201,7 @@ class AgentGuide:
             (
                 f"tg-recall Codex guide {self.prompt_version} (compatible with {self.tg_recall_version})",
                 "Use tg-recall as local, cited Telegram evidence. Treat Codex memories only as navigation hints; verify Telegram claims with cited evidence.",
-                f"Current v0.2-compatible capabilities: {', '.join(self.capabilities)}.",
+                f"Current capabilities: {', '.join(self.capabilities)}.",
                 f"Start bounded: --limit {budgets.initial_limit} --context {budgets.initial_context} --token-budget {budgets.initial_token_budget}. ",
                 f"If evidence is insufficient, widen once at most: --limit {budgets.widened_limit} --context {budgets.widened_context} --token-budget {budgets.widened_token_budget}.",
                 "For a near-instant narrow read-only lookup, prefer one gpt-5.3-codex-spark subagent only when the current Codex surface exposes it, its separate limit is usable, and preview quality is suitable.",
@@ -201,17 +213,96 @@ class AgentGuide:
                 f"Forbidden: {forbidden}.",
                 "Knowledge sessions now support scoped catalog lookup, evidence-set reuse, inspect/resume checkpoints, and explicit bounded cited-source expansion. "
                 "Human operators may create, checkpoint, or selectively refresh sessions; automation must remain read-only.",
-                "Planned, not available in v0.2 CLI or MCP: cited synthesized wiki lookup.",
+                "Not currently available: cited synthesized wiki lookup.",
             )
         )
 
 
-def build_agent_guide(tg_recall_version: str, *, capabilities: tuple[str, ...] | None = None) -> AgentGuide:
-    """Construct the default additive guide without inspecting Codex state."""
+def build_agent_guide(tg_recall_version: str | None = None, *, capabilities: tuple[str, ...] | None = None) -> AgentGuide:
+    """Construct the default guide from the installed package version.
+
+    ``tg_recall_version`` remains an explicit test/rendering override.  Omit
+    it to read the installed package version at runtime.
+    """
+
+    if tg_recall_version is None:
+        tg_recall_version = runtime_package_version()
 
     if capabilities is None:
         return AgentGuide(tg_recall_version=tg_recall_version)
     return AgentGuide(tg_recall_version=tg_recall_version, capabilities=capabilities)
+
+
+def render_harness_instruction(guide: AgentGuide, target: HarnessTarget | str) -> str:
+    """Render a deterministic, no-I/O instruction artifact for one harness.
+
+    Target files and ownership markers are intentionally handled by the
+    integration adapters.  This function owns the common semantic payload, so
+    every harness receives identical version, budget, routing, citation, and
+    safety guidance even when its outer syntax differs.
+    """
+
+    selected_target = HarnessTarget(target)
+    body = _canonical_instruction_body(guide)
+    digest = sha256(body.encode("utf-8")).hexdigest()
+    metadata = (
+        f"guide_schema_version: {guide.schema_version}",
+        f"guide_prompt_version: {guide.prompt_version}",
+        f"tg_recall_version: {guide.tg_recall_version}",
+        f"instruction_digest: sha256:{digest}",
+    )
+
+    if selected_target is HarnessTarget.CURSOR:
+        return "\n".join(
+            (
+                "---",
+                "description: tg-recall local cited Telegram workflow",
+                "alwaysApply: true",
+                "---",
+                "<!-- tg-recall generated instruction; do not edit the managed block -->",
+                *metadata,
+                "",
+                body,
+                "",
+            )
+        )
+
+    return "\n".join(
+        (
+            "<!-- tg-recall generated instruction; do not edit the managed block -->",
+            *metadata,
+            "",
+            body,
+            "",
+        )
+    )
+
+
+def render_all_harness_instructions(guide: AgentGuide) -> dict[str, str]:
+    """Return every target rendering in stable harness-name order."""
+
+    return {target.value: render_harness_instruction(guide, target) for target in HarnessTarget}
+
+
+def _canonical_instruction_body(guide: AgentGuide) -> str:
+    budgets = guide.budgets
+    allowed = ", ".join(guide.safety.allowed_operations)
+    forbidden = ", ".join(guide.safety.forbidden_operations)
+    return "\n".join(
+        (
+            "For Telegram tasks, start with `tg-recall agent guide --json` and use only chats and date ranges explicitly requested by the user.",
+            "Treat local summaries and agent memories as navigation hints; verify Telegram claims with cited local evidence.",
+            f"Start bounded: --limit {budgets.initial_limit} --context {budgets.initial_context} --token-budget {budgets.initial_token_budget}.",
+            f"If evidence is insufficient, widen once at most: --limit {budgets.widened_limit} --context {budgets.widened_context} --token-budget {budgets.widened_token_budget}.",
+            f"Use at most {budgets.max_tool_calls} tool calls and {budgets.max_retries} retry when following this initial workflow.",
+            "For a narrow read-only delegated lookup, prefer gpt-5.3-codex-spark only when the current host exposes it, its separate limit is available, and preview quality is suitable.",
+            "Otherwise use gpt-5.6-luna at low or medium reasoning for bounded search, extraction, classification, and cited source expansion; otherwise continue with the current model.",
+            "Do not rerun sufficient low-cost retrieval on a stronger model; escalate only for conflicting evidence, ambiguous multi-source synthesis, security-critical review, migration/data-loss risk, or repeated insufficient retrieval.",
+            "MCP is read-only. Cite conclusions with `tg://` links and distinguish raw evidence from summaries.",
+            f"Allowed: {allowed}.",
+            f"Forbidden: {forbidden}. Do not invoke update or integrate lifecycle commands.",
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -270,7 +361,7 @@ def select_route(task: RoutingTask, availability: RoutingAvailability, *, guide:
     started.  A routing failure therefore never blocks archive retrieval.
     """
 
-    guide = guide or build_agent_guide("unknown")
+    guide = guide or build_agent_guide()
     if task.is_trivial_direct_lookup or not task.requires_subagent:
         return RouteDecision(
             model=availability.current_model or guide.routing.current.value,
