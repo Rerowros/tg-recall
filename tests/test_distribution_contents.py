@@ -19,9 +19,10 @@ SDIST_FILES = {
     "uv.lock",
     "PKG-INFO",
 }
-SDIST_PREFIXES = ("src/tg_ecosystem/", "tests/", "docs/")
+SDIST_PREFIXES = ("src/tg_recall/", "tests/", "docs/")
 FORBIDDEN_PATH_PARTS = (
     ".tg-ecosystem",
+    ".tg-recall",
     ".codex",
     "exports",
     "reports",
@@ -51,8 +52,8 @@ def _build_distributions(output_dir: Path) -> tuple[Path, Path]:
         capture_output=True,
         text=True,
     )
-    sdist = next(output_dir.glob("tg_ecosystem-*.tar.gz"))
-    wheel = next(output_dir.glob("tg_ecosystem-*.whl"))
+    sdist = next(output_dir.glob("tg_recall-*.tar.gz"))
+    wheel = next(output_dir.glob("tg_recall-*.whl"))
     return sdist, wheel
 
 
@@ -79,7 +80,7 @@ def test_release_distributions_contain_only_public_files(tmp_path: Path) -> None
         wheel_members = archive.namelist()
     _assert_no_private_paths(wheel_members)
     assert all(
-        member.startswith("tg_ecosystem/")
-        or (member.startswith("tg_ecosystem-") and ".dist-info/" in member)
+        member.startswith("tg_recall/")
+        or (member.startswith("tg_recall-") and ".dist-info/" in member)
         for member in wheel_members
     ), wheel_members

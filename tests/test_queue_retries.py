@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from tg_ecosystem.media import MediaDownloader, MediaStore
-from tg_ecosystem.models import ChatRecord, MessageRecord
-from tg_ecosystem.storage import Database
-from tg_ecosystem.transcription import TranscriptionService
+from tg_recall.media import MediaDownloader, MediaStore
+from tg_recall.models import ChatRecord, MessageRecord
+from tg_recall.storage import Database
+from tg_recall.transcription import TranscriptionService
 
 
 def seed_voice(db: Database) -> int:
@@ -36,7 +36,7 @@ def test_media_download_failure_becomes_retryable_job(tmp_path) -> None:
     assert result["failed"] == 1
     with db.connect() as conn:
         row = conn.execute("SELECT status, retryable, error FROM jobs WHERE stage = 'media_download' ORDER BY id LIMIT 1").fetchone()
-    assert row["status"] == "failed"
+    assert row["status"] == "retry"
     assert row["retryable"] == 1
     assert "rate limited" in row["error"]
 
@@ -53,6 +53,6 @@ def test_transcription_failure_becomes_retryable_job(tmp_path) -> None:
     assert result["failed"] == 1
     with db.connect() as conn:
         row = conn.execute("SELECT status, retryable, error FROM jobs WHERE stage = 'transcription' ORDER BY id DESC LIMIT 1").fetchone()
-    assert row["status"] == "failed"
+    assert row["status"] == "retry"
     assert row["retryable"] == 1
     assert "No sidecar transcript" in row["error"]

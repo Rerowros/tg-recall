@@ -76,5 +76,6 @@ class MediaRecord:
     mime_type: str | None = None
     size_bytes: int | None = None
     sha256: str | None = None
+    storage_key: str | None = None
     local_path: str | None = None
     status: str = "pending"

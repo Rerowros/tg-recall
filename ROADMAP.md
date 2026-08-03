@@ -10,7 +10,7 @@
 
 ## Private Agent Wiki Memory
 
-`add-private-agent-wiki-memory` is the next OpenSpec change. It will keep a private Markdown knowledge layer under `.tg-ecosystem/wiki/` above the raw archive:
+`add-private-agent-wiki-memory` is the next OpenSpec change. It will keep a private Markdown knowledge layer under the selected profile's `data/profiles/<profile>/wiki/` above the raw archive:
 
 ```text
 raw Telegram snapshots -> cited Markdown wiki -> compact agent queries
@@ -18,4 +18,4 @@ raw Telegram snapshots -> cited Markdown wiki -> compact agent queries
 
 The wiki will contain evidence-backed pages for people, relationships, projects, decisions, and communication styles. It will remain local, ignored by Git, and omitted from package artifacts. Every statement must retain Telegram citations, a timestamp, confidence, and the source snapshot that produced it.
 
-The design is intentionally compatible with LLM-Wiki-style Markdown workflows, but `tg-ecosystem` will not require an external wiki dependency.
+The design is intentionally compatible with LLM-Wiki-style Markdown workflows, but `tg-recall` will not require an external wiki dependency.

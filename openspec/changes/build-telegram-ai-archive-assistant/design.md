@@ -45,7 +45,7 @@ Use Python for the MVP because Telegram MTProto, transcription orchestration, lo
 Proposed module layout:
 
 ```text
-tg_ecosystem/
+tg_recall/
   config/          # settings, profiles, provider policy
   telegram/        # MTProto session, chat discovery, history sync
   storage/         # SQLite schema, repositories, migrations

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from tg_ecosystem.media import MediaDownloader, MediaStore, copy_file_download
-from tg_ecosystem.models import ChatRecord, MessageRecord
-from tg_ecosystem.storage import Database
-from tg_ecosystem.transcription import SidecarTextProvider, TranscriptionService
+from tg_recall.media import MediaDownloader, MediaStore, copy_file_download
+from tg_recall.models import ChatRecord, MessageRecord
+from tg_recall.storage import Database
+from tg_recall.transcription import SidecarTextProvider, TranscriptionService
 
 
 def seed_media_job(db: Database) -> int:

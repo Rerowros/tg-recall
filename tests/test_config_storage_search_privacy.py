@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from tg_ecosystem.config import AppConfig, TelegramConfig, redact_config, set_config_value
-from tg_ecosystem.models import ChatRecord, MessageRecord
-from tg_ecosystem.storage import Database
+from tg_recall.config import AppConfig, TelegramConfig, redact_config, set_config_value
+from tg_recall.models import ChatRecord, MessageRecord
+from tg_recall.storage import Database
 
 
 def test_config_redacts_secrets() -> None:

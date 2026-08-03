@@ -10,7 +10,7 @@ The archive already stores normalized messages, transcripts, citations, and sync
 
 ## Design
 
-Store immutable per-chat source snapshots under `.tg-ecosystem/wiki/raw/` and synthesized pages under `.tg-ecosystem/wiki/pages/`. Pages use YAML frontmatter with `kind`, stable subject identifiers, `snapshot_id`, `updated_at`, and source citations. Page bodies separate observed facts from hypotheses and assign a confidence value to each assertion.
+Store immutable per-chat source snapshots under `data/profiles/<profile>/wiki/raw/` and synthesized pages under `data/profiles/<profile>/wiki/pages/`. Pages use YAML frontmatter with `kind`, stable subject identifiers, `snapshot_id`, `updated_at`, and source citations. Page bodies separate observed facts from hypotheses and assign a confidence value to each assertion.
 
 SQLite records snapshot ranges, page revisions, and source citation mappings. A compiler selects only messages newer than the last successful snapshot, writes a new immutable snapshot, and creates a new page revision rather than modifying history in place.
 
@@ -18,7 +18,7 @@ Agents call a compact wiki query first. The response returns a short page excerp
 
 ## Privacy And Compatibility
 
-All wiki files stay below `.tg-ecosystem/`, are ignored by Git and excluded from wheels/sdists. Markdown with frontmatter makes the layer readable by Codex and compatible with LLM-Wiki-style workflows without coupling the application to a third-party runtime.
+All wiki files stay below the selected local profile, are ignored by Git and excluded from wheels/sdists. Markdown with frontmatter makes the layer readable by Codex and compatible with LLM-Wiki-style workflows without coupling the application to a third-party runtime.
 
 ## Validation
 

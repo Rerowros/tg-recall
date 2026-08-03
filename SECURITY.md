@@ -2,7 +2,7 @@
 
 ## Sensitive Data
 
-`tg-ecosystem` handles Telegram user-session files, API credentials, local archive databases, downloaded media, and transcripts. Treat all local state as sensitive.
+`tg-recall` handles Telegram user-session files, API credentials, local archive databases, downloaded media, and transcripts. Treat all local state as sensitive.
 
 Do not include session files, archive data, media, transcripts, real chat identifiers, or personal reports in issues, pull requests, logs, screenshots, or release artifacts.
 
