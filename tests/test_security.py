@@ -6,7 +6,7 @@ from tg_recall.security import CONFIRMATION_PHRASE, enforce_ai_archive_read, req
 
 
 def test_ai_archive_read_disabled_by_default(monkeypatch) -> None:
-    monkeypatch.setenv("tg_recall_AI_MODE", "1")
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
 
     with pytest.raises(PermissionError, match="disabled"):
         enforce_ai_archive_read(
@@ -19,7 +19,7 @@ def test_ai_archive_read_disabled_by_default(monkeypatch) -> None:
 
 
 def test_ai_archive_read_requires_allowed_chat(monkeypatch) -> None:
-    monkeypatch.setenv("tg_recall_AI_MODE", "1")
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
 
     with pytest.raises(PermissionError, match="not allowed"):
         enforce_ai_archive_read(
@@ -32,7 +32,7 @@ def test_ai_archive_read_requires_allowed_chat(monkeypatch) -> None:
 
 
 def test_ai_archive_read_caps_limit(monkeypatch) -> None:
-    monkeypatch.setenv("tg_recall_AI_MODE", "1")
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
 
     limit = enforce_ai_archive_read(
         enabled=True,
@@ -46,15 +46,15 @@ def test_ai_archive_read_caps_limit(monkeypatch) -> None:
 
 
 def test_dangerous_operation_blocked_in_automation(monkeypatch) -> None:
-    monkeypatch.setenv("tg_recall_AI_MODE", "1")
-    monkeypatch.delenv("tg_recall_TRUSTED_AUTOMATION", raising=False)
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
+    monkeypatch.delenv("TG_RECALL_TRUSTED_AUTOMATION", raising=False)
 
     with pytest.raises(PermissionError, match="blocked"):
         require_human_confirmation("purge", CONFIRMATION_PHRASE)
 
 
 def test_trusted_automation_requires_exact_confirmation(monkeypatch) -> None:
-    monkeypatch.setenv("tg_recall_AI_MODE", "1")
-    monkeypatch.setenv("tg_recall_TRUSTED_AUTOMATION", "1")
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
+    monkeypatch.setenv("TG_RECALL_TRUSTED_AUTOMATION", "1")
 
     require_human_confirmation("scripted maintenance", CONFIRMATION_PHRASE)
