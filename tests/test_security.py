@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from tg_recall.security import CONFIRMATION_PHRASE, enforce_ai_archive_read, require_human_confirmation
+from tg_recall.security import CONFIRMATION_PHRASE, enforce_ai_archive_read, is_automation_shell, require_human_confirmation
+
+
+def test_ci_marker_is_automation_shell(monkeypatch) -> None:
+    for name in ["CODEX", "AI_TERMINAL", "TG_RECALL_AI_MODE", "TG_ECOSYSTEM_AI_MODE"]:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CI", "true")
+
+    assert is_automation_shell() is True
 
 
 def test_ai_archive_read_disabled_by_default(monkeypatch) -> None:
