@@ -2,7 +2,7 @@
 
 Local-first Telegram archive for people and AI agents. `tg-recall` stores only explicitly selected chats in a local profile, indexes message text and transcripts, and returns source citations such as `tg://chat/.../message/...`.
 
-> Early alpha. The archive includes private conversations and a Telegram user session. Keep the profile local, use full-disk encryption, and verify important findings against Telegram.
+> Early alpha (current release: v0.5.0). The archive includes private conversations and a Telegram user session. Keep the profile local, use full-disk encryption, and verify important findings against Telegram.
 
 ## Install
 
@@ -22,7 +22,7 @@ uv tool install --editable .
 tg-recall doctor --json
 ```
 
-`tg-ecosystem` and `tg-ecosystem-mcp` remain deprecated aliases for one minor release.
+`tg-ecosystem` and `tg-ecosystem-mcp` are deprecated compatibility aliases. Use `tg-recall` and `tg-recall-mcp` in new scripts; the aliases may be removed in a future breaking release.
 
 ## Local Storage
 
@@ -143,7 +143,7 @@ The model path must already exist locally; tg-recall never downloads a model. `a
 
 ## Current Limitations
 
-- `ask` is extractive cited retrieval; it does not call an LLM provider.
+- `ask` defaults to extractive cited retrieval. The optional OpenAI Responses provider requires its extra plus explicit provider-policy and scope approval; disabled or unavailable providers return a cited local fallback.
 - Legacy `--semantic` uses local token overlap. Use `--retrieval-mode auto|hybrid|semantic` for the optional local embedding index.
 - Local Whisper is invoked through an installed `whisper` executable; it is not bundled with the package.
 - MCP cannot sync, download, transcribe, modify configuration or purge data.

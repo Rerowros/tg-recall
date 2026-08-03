@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.0 - 2026-08-03
+
+- Harden agent and MCP scope enforcement, preserve monotonic sync/backfill watermarks, and keep `FLOOD_WAIT` recovery resumable.
+- Add transactional archive maintenance through schema v6, `doctor` diagnostics, filtered job inspection, explicit retry, and queue repair previews.
+- Add budgeted context routing with Codex Spark/Luna guidance, immutable cited evidence sets, research sessions, and profile-local wiki memory.
+- Add optional fully local hybrid retrieval with explicit embedding configuration, vector freshness, deterministic cited evidence, and keyword fallback.
+- Add bounded private AI export packs with verifiable manifests; archives, sessions, media, wiki, exports, and packs remain private by default.
+- Add opt-in OpenAI Responses synthesis with policy checks and cited local fallback when a provider is disabled or unavailable.
+- Extend the compatible CLI and read-only MCP surface while preserving local-first privacy boundaries and JSON contracts.
+
 ## v0.2.0 - 2026-08-03
 
 - Rename the public CLI and package to `tg-recall`; retain deprecated legacy executable aliases.

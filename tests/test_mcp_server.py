@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from tg_recall import __version__
 from tg_recall.config import AIAccessPolicy, AppConfig
 from tg_recall.mcp_server import ReadOnlyMCPServer
 from tg_recall.models import ChatRecord, MessageRecord
@@ -16,6 +17,13 @@ def server_with_data(tmp_path, allowed: list[int]) -> ReadOnlyMCPServer:
     db.upsert_chat(ChatRecord(chat_id=10, title="Work", chat_type="group"))
     db.upsert_message(MessageRecord(chat_id=10, message_id=1, date=datetime(2026, 1, 1, tzinfo=UTC), text="deadline"))
     return ReadOnlyMCPServer(cfg, db)
+
+
+def test_mcp_initialize_reports_package_release_version(tmp_path) -> None:
+    response = server_with_data(tmp_path, [10]).handle({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+
+    assert __version__ == "0.5.0"
+    assert response["result"]["serverInfo"] == {"name": "tg-recall", "version": __version__}
 
 
 def test_mcp_search_is_read_only_and_scoped(tmp_path) -> None:
