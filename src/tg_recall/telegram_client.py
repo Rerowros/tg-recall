@@ -22,6 +22,15 @@ class TelegramDependencyError(RuntimeError):
     pass
 
 
+class TelegramRetryPendingError(RuntimeError):
+    """A persisted FloodWait is still active; no Telegram request was made."""
+
+    def __init__(self, chat_id: int, retry_after: str):
+        self.chat_id = chat_id
+        self.retry_after = retry_after
+        super().__init__(f"Telegram sync for chat {chat_id} is deferred until {retry_after}")
+
+
 def _load_telethon() -> tuple[Any, Any]:
     try:
         from telethon import TelegramClient
@@ -68,8 +77,16 @@ class TelegramArchiveClient:
         self.db.audit("telegram_chats_discovered", details={"count": len(chats)})
         return chats
 
-    async def sync_scope(self, scope_name: str, limit: int = 100, backfill: bool = False) -> dict[str, int]:
-        scope = self.db.get_scope(scope_name)
+    async def sync_scope(
+        self,
+        scope_name: str,
+        limit: int = 100,
+        backfill: bool = False,
+        effective_scope: dict[str, Any] | None = None,
+    ) -> dict[str, int]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1_000:
+            raise ValueError("sync limit must be an integer in 1..1000")
+        scope = effective_scope or self.db.get_scope(scope_name)
         if not scope:
             raise ValueError(f"Unknown sync scope: {scope_name}")
         if not scope["chat_ids"]:
@@ -86,6 +103,8 @@ class TelegramArchiveClient:
                 since = parse_date(scope.get("since"))
                 until = parse_date(scope.get("until"))
                 state = self.db.get_sync_state(chat_id)
+                if state and _retry_is_pending(state.get("retry_after")):
+                    raise TelegramRetryPendingError(chat_id, state["retry_after"])
                 iterator_args: dict[str, Any] = {"limit": limit}
                 if backfill and state and state.get("oldest_message_id"):
                     iterator_args["max_id"] = state["oldest_message_id"]
@@ -116,10 +135,29 @@ class TelegramArchiveClient:
                                 if media and media.status == "downloaded":
                                     self.db.enqueue_transcription(media_id)
                             media_jobs += 1
-                    self.db.update_sync_state(chat_id, newest_message_id=newest_id, oldest_message_id=oldest_id)
+                    # A completed forward page can safely advance its high
+                    # watermark. A completed historical page advances only
+                    # the low watermark. Both values stay monotonic in the
+                    # repository and are independent cursors.
+                    self.db.update_sync_state(
+                        chat_id,
+                        newest_message_id=None if backfill else newest_id,
+                        oldest_message_id=oldest_id if backfill else oldest_id,
+                        retry_after=None,
+                    )
                 except FloodWaitError as exc:
                     retry_after = (datetime.now(UTC) + timedelta(seconds=exc.seconds)).isoformat()
-                    self.db.update_sync_state(chat_id, retry_after=retry_after)
+                    # Telegram yields newest-first. Advancing the forward
+                    # high watermark after a partial page could skip unseen
+                    # messages below it, so forward retry deliberately
+                    # replays idempotent upserts. Historical backfill is
+                    # safe to checkpoint at its low watermark because the
+                    # next page continues strictly older history.
+                    self.db.update_sync_state(
+                        chat_id,
+                        oldest_message_id=oldest_id if backfill else None,
+                        retry_after=retry_after,
+                    )
                     self.db.audit("telegram_flood_wait", scope_name, chat_id=chat_id, seconds=exc.seconds)
                     raise
         self.db.audit("telegram_scope_synced", scope_name, messages=synced, media_jobs=media_jobs, backfill=backfill)
@@ -334,3 +372,14 @@ def ensure_aware(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value
+
+
+def _retry_is_pending(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        return ensure_aware(datetime.fromisoformat(value.replace("Z", "+00:00"))) > datetime.now(UTC)
+    except ValueError:
+        # A malformed legacy retry timestamp must not permanently block a
+        # bounded user-requested sync. A successful page clears it below.
+        return False

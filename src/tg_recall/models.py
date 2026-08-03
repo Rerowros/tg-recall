@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,42 @@ class SearchFilters:
     since: str | None = None
     until: str | None = None
     media_type: str | None = None
+    media_types: tuple[str, ...] | None = None
     has_link: bool | None = None
+
+    def normalized(self) -> "SearchFilters":
+        if self.chat_id is not None and (isinstance(self.chat_id, bool) or not isinstance(self.chat_id, int)):
+            raise ValueError("chat_id filter must be an integer")
+        if self.sender_id is not None and (isinstance(self.sender_id, bool) or not isinstance(self.sender_id, int)):
+            raise ValueError("sender_id filter must be an integer")
+        for value in (self.since, self.until):
+            if value is not None:
+                _parse_filter_date(value)
+        if self.since and self.until and self.since > self.until:
+            raise ValueError("since filter must not be after until")
+        allowed_media = {"voice", "audio", "photo", "video", "document", "media"}
+        if self.media_type is not None and self.media_type not in allowed_media:
+            raise ValueError("unknown media_type filter")
+        values = tuple(sorted(set(self.media_types))) if self.media_types is not None else None
+        if values is not None and not set(values) <= allowed_media:
+            raise ValueError("unknown media_types filter")
+        if self.media_type is not None and values is not None:
+            raise ValueError("media_type and media_types filters cannot be combined")
+        if self.has_link is not None and not isinstance(self.has_link, bool):
+            raise ValueError("has_link filter must be boolean")
+        return SearchFilters(self.chat_id, self.sender_id, self.since, self.until, self.media_type, values, self.has_link)
+
+
+def _parse_filter_date(value: str) -> None:
+    if not isinstance(value, str):
+        raise ValueError("date filters must be ISO-8601 strings")
+    try:
+        if len(value) == 10:
+            date.fromisoformat(value)
+        else:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("date filters must be ISO-8601 strings") from exc
 
 
 @dataclass(frozen=True)

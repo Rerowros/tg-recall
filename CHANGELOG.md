@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.0 - Unreleased
+## v0.2.0 - 2026-08-03
 
 - Rename the public CLI and package to `tg-recall`; retain deprecated legacy executable aliases.
 - Add platform-aware roots, portable `--home` mode and isolated Telegram profiles.

@@ -12,6 +12,7 @@ build/
 .tg-ecosystem/
 .tg-recall/
 exports/
+wiki/
 reports/
 *_report.md
 *_personal_*.md

@@ -28,8 +28,15 @@ Repository = "https://github.com/Rerowros/tg-recall"
 Issues = "https://github.com/Rerowros/tg-recall/issues"
 
 [project.optional-dependencies]
+local-embeddings = [
+  "sentence-transformers>=5.0.0",
+]
+openai-responses = [
+  "openai>=2.0.0,<3",
+]
 dev = [
   "pytest>=8.0.0",
+  "ruff>=0.8.0",
 ]
 
 [project.scripts]
@@ -70,3 +77,10 @@ exclude = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

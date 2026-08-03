@@ -90,6 +90,18 @@ class AppPaths:
         return self.profile_data_dir / "wiki"
 
     @property
+    def wiki_raw_dir(self) -> Path:
+        return self.wiki_dir / "raw"
+
+    @property
+    def wiki_pages_dir(self) -> Path:
+        return self.wiki_dir / "pages"
+
+    @property
+    def wiki_revisions_dir(self) -> Path:
+        return self.wiki_dir / "revisions"
+
+    @property
     def exports_dir(self) -> Path:
         return self.profile_data_dir / "exports"
 
@@ -128,9 +140,9 @@ class AppPaths:
             self.credentials_path.parent,
             self.profile_data_dir,
             self.media_dir,
-            self.wiki_dir / "raw",
-            self.wiki_dir / "pages",
-            self.wiki_dir / "revisions",
+            self.wiki_raw_dir,
+            self.wiki_pages_dir,
+            self.wiki_revisions_dir,
             self.exports_dir,
             self.logs_dir,
             self.locks_dir,
