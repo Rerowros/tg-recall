@@ -1,12 +1,14 @@
 # Archive maintenance
 
+**English canonical** | [Русский](archive-maintenance.ru.md)
+
 `tg-recall` records local SQLite migrations in `schema_migrations` with a
 version, checksum and completion time. Migrations only move forward. Before an
 upgrade or a broad queue repair, create an essential backup:
 
 ```powershell
 tg-recall backup create --mode essential --output D:\Backups\tg-recall-essential.zip
-tg-recall doctor --json
+tg-recall --json doctor
 ```
 
 If `doctor` reports a schema newer than the installed application, do not
@@ -16,15 +18,15 @@ release. A failed migration is transactional; later steps are not applied.
 Inspect queue state without changing it:
 
 ```powershell
-tg-recall jobs --stage transcription --status retry --retryable true --limit 50 --json
-tg-recall jobs --repair --json
+tg-recall --json jobs --stage transcription --status retry --retryable true --limit 50
+tg-recall --json jobs --repair
 ```
 
 Retry only explicit eligible jobs. Jobs with a future `retry_after` remain in
 backoff unless a human confirms the override:
 
 ```powershell
-tg-recall jobs --retry 42 --json
+tg-recall --json jobs --retry 42
 tg-recall jobs --retry 42 --override-retry-after --confirm-risk "I understand this can change my local Telegram archive"
 ```
 

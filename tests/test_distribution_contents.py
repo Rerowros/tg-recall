@@ -9,17 +9,36 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SDIST_FILES = {
     "README.md",
+    "README.ru.md",
     "LICENSE",
     "SECURITY.md",
+    "SECURITY.ru.md",
     "CONTRIBUTING.md",
+    "CONTRIBUTING.ru.md",
     "CHANGELOG.md",
+    "CHANGELOG.ru.md",
     "ROADMAP.md",
+    "ROADMAP.ru.md",
     ".gitignore",
     "pyproject.toml",
     "uv.lock",
     "PKG-INFO",
 }
 SDIST_PREFIXES = ("src/tg_recall/", "tests/", "docs/")
+REQUIRED_RUSSIAN_DOCS = {
+    "README.ru.md",
+    "SECURITY.ru.md",
+    "CONTRIBUTING.ru.md",
+    "CHANGELOG.ru.md",
+    "ROADMAP.ru.md",
+    "docs/agent-setup/prompt.ru.md",
+    "docs/ai-export-packs.ru.md",
+    "docs/archive-maintenance.ru.md",
+    "docs/backup-restore.ru.md",
+    "docs/local-transcription.ru.md",
+    "docs/openai-responses-provider.ru.md",
+    "docs/wiki-memory.ru.md",
+}
 FORBIDDEN_PATH_PARTS = (
     ".tg-ecosystem",
     ".tg-recall",
@@ -92,16 +111,20 @@ def test_release_distributions_contain_only_public_files(tmp_path: Path) -> None
     root_prefix = members[0].split("/", 1)[0] + "/"
     relative_members = [member.removeprefix(root_prefix) for member in members]
     _assert_no_private_paths(relative_members)
-    assert all(
-        member in SDIST_FILES or member.startswith(SDIST_PREFIXES)
-        for member in relative_members
-    ), relative_members
+    assert {
+        "docs/agent-setup/prompt.md",
+        "docs/local-transcription.md",
+        "docs/local-transcription.ru.md",
+    } <= set(relative_members)
+    assert REQUIRED_RUSSIAN_DOCS <= set(relative_members)
+    assert all(member in SDIST_FILES or member.startswith(SDIST_PREFIXES) for member in relative_members), (
+        relative_members
+    )
 
     with zipfile.ZipFile(wheel) as archive:
         wheel_members = archive.namelist()
     _assert_no_private_paths(wheel_members)
     assert all(
-        member.startswith("tg_recall/")
-        or (member.startswith("tg_recall-") and ".dist-info/" in member)
+        member.startswith("tg_recall/") or (member.startswith("tg_recall-") and ".dist-info/" in member)
         for member in wheel_members
     ), wheel_members

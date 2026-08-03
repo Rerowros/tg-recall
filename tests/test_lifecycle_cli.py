@@ -224,12 +224,16 @@ def test_agent_guide_reports_runtime_version_without_legacy_v0_2_key(tmp_path, m
     assert "current_v0_2" not in payload["agent_guide"]
 
 
-def test_integrate_list_is_human_only_and_does_not_load_profile_config(tmp_path, monkeypatch, capsys) -> None:
+def test_integrate_list_is_allowed_in_automation_without_profile_or_home_access(tmp_path, monkeypatch, capsys) -> None:
     monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
     monkeypatch.setattr(cli, "load_config", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no config")))
 
-    assert main(["--home", str(tmp_path / "home"), "--json", "integrate", "list"]) == 1
-    assert json.loads(capsys.readouterr().out)["error"]["code"] == "agent_operation_forbidden"
+    assert main(["--home", str(tmp_path / "home"), "--json", "integrate", "list"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "list"
+    assert payload["status"] == "available"
+    assert not (tmp_path / "home").exists()
 
 
 def test_integrate_list_reports_documented_capabilities_without_profile_read(tmp_path, monkeypatch, capsys) -> None:
@@ -337,10 +341,11 @@ def test_integrate_generic_requires_all_explicit_destinations(tmp_path, monkeypa
     assert "generic integration requires" in payload["conflicts"][0]
 
 
-def test_integrate_automation_gate_precedes_home_state_config_and_harness_work(tmp_path, monkeypatch, capsys) -> None:
+def test_integrate_write_gate_precedes_home_state_config_and_harness_work(tmp_path, monkeypatch, capsys) -> None:
     project = tmp_path / "project"
     project.mkdir()
     monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
+    monkeypatch.setenv("TG_RECALL_TRUSTED_AUTOMATION", "1")
     monkeypatch.setattr(
         cli.Path, "home", classmethod(lambda cls: (_ for _ in ()).throw(AssertionError("no home lookup")))
     )
@@ -356,7 +361,7 @@ def test_integrate_automation_gate_precedes_home_state_config_and_harness_work(t
                 str(tmp_path / "home"),
                 "--json",
                 "integrate",
-                "preview",
+                "install",
                 "--target",
                 "codex",
                 "--scope",
@@ -368,6 +373,48 @@ def test_integrate_automation_gate_precedes_home_state_config_and_harness_work(t
         == 1
     )
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "agent_operation_forbidden"
+
+
+@pytest.mark.parametrize(("action", "expected_exit"), [("preview", 0), ("status", 1)])
+def test_integrate_read_only_discovery_in_automation_is_data_blind_and_no_write(
+    tmp_path, monkeypatch, capsys, action, expected_exit
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    home = tmp_path / "home"
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
+    monkeypatch.setattr(cli, "load_config", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no profile config")))
+    monkeypatch.setattr(cli, "Database", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no SQLite")))
+    monkeypatch.setattr(
+        cli, "TelegramArchiveClient", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no Telegram session"))
+    )
+    monkeypatch.setattr(cli, "build_opener", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no network")))
+
+    assert (
+        main(
+            [
+                "--home",
+                str(home),
+                "--json",
+                "integrate",
+                action,
+                "--target",
+                "codex",
+                "--scope",
+                "project",
+                "--project-root",
+                str(project),
+            ]
+        )
+        == expected_exit
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == action
+    assert payload["status"] != "conflict"
+    assert not (project / "AGENTS.md").exists()
+    assert not (project / ".codex").exists()
+    assert not (home / "state").exists()
 
 
 def test_integrate_user_scope_uses_explicit_home_and_second_install_is_noop(tmp_path, monkeypatch, capsys) -> None:

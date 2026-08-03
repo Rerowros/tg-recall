@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -24,6 +25,27 @@ SENSITIVE_KEYS = {
     "secret",
     "session_path",
 }
+
+
+_TRANSCRIPTION_BACKENDS = frozenset({"whisper-cli", "faster-whisper-xxl"})
+_TRANSCRIPTION_COMPUTE_TYPES = frozenset(
+    {
+        "default",
+        "auto",
+        "int8",
+        "int8_float16",
+        "int8_float32",
+        "int8_bfloat16",
+        "int16",
+        "float16",
+        "float32",
+        "bfloat16",
+    }
+)
+_SAFE_TRANSCRIPTION_DEVICE = re.compile(r"(?:auto|cpu|cuda(?::[0-9]{1,3})?)\Z")
+_SAFE_TRANSCRIPTION_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SAFE_TRANSCRIPTION_LANGUAGE = re.compile(r"[A-Za-z]+(?: [A-Za-z]+)*\Z")
+_MAX_TRANSCRIPTION_TIMEOUT_SECONDS = 3_600
 
 
 @dataclass
@@ -85,6 +107,55 @@ class SemanticConfig:
 
 
 @dataclass
+class TranscriptionConfig:
+    """Typed, profile-local settings for the selected local transcription CLI."""
+
+    backend: str = "whisper-cli"
+    executable: str | None = None
+    model: str | None = None
+    model_dir: str | None = None
+    language: str | None = None
+    device: str | None = None
+    compute_type: str | None = None
+    vad_filter: bool | None = None
+    timeout_seconds: int = 600
+
+    def __post_init__(self) -> None:
+        if self.backend not in _TRANSCRIPTION_BACKENDS:
+            raise ValueError(f"Unsupported transcription backend: {self.backend}")
+        for field_name in ("executable", "model_dir"):
+            value = getattr(self, field_name)
+            if value is not None and (not isinstance(value, str) or not value or "\x00" in value):
+                raise ValueError(f"transcription.{field_name} must be a non-empty string or null")
+        if self.model is not None and (
+            not isinstance(self.model, str) or not _SAFE_TRANSCRIPTION_MODEL.fullmatch(self.model)
+        ):
+            raise ValueError("transcription.model must contain only letters, digits, dots, underscores, and hyphens")
+        if self.language is not None and (
+            not isinstance(self.language, str)
+            or len(self.language) > 32
+            or not _SAFE_TRANSCRIPTION_LANGUAGE.fullmatch(self.language)
+        ):
+            raise ValueError("transcription.language must be a language code or name with letters and single spaces")
+        if self.device is not None and (
+            not isinstance(self.device, str) or not _SAFE_TRANSCRIPTION_DEVICE.fullmatch(self.device)
+        ):
+            raise ValueError(f"Unsupported transcription device: {self.device}")
+        if self.compute_type is not None and self.compute_type not in _TRANSCRIPTION_COMPUTE_TYPES:
+            raise ValueError(f"Unsupported transcription compute type: {self.compute_type}")
+        if self.vad_filter is not None and not isinstance(self.vad_filter, bool):
+            raise ValueError("transcription.vad_filter must be a boolean or null")
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, int)
+            or not 1 <= self.timeout_seconds <= _MAX_TRANSCRIPTION_TIMEOUT_SECONDS
+        ):
+            raise ValueError(
+                f"transcription.timeout_seconds must be between 1 and {_MAX_TRANSCRIPTION_TIMEOUT_SECONDS}"
+            )
+
+
+@dataclass
 class AppConfig:
     profile: str = "default"
     data_dir: str = ""
@@ -100,6 +171,7 @@ class AppConfig:
     ai_access: AIAccessPolicy = field(default_factory=AIAccessPolicy)
     llm: LLMConfig = field(default_factory=LLMConfig)
     semantic: SemanticConfig = field(default_factory=SemanticConfig)
+    transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
 
     @classmethod
     def default(cls, home: str | Path | None = None, profile: str | None = None) -> "AppConfig":
@@ -162,7 +234,9 @@ def load_config(
         return _load_legacy_config(explicit_path, home=home, profile=profile)
 
     global_raw = _read_json(paths.config_path)
-    selected_profile = profile or os.environ.get("TG_RECALL_PROFILE") or global_raw.get("active_profile") or paths.profile
+    selected_profile = (
+        profile or os.environ.get("TG_RECALL_PROFILE") or global_raw.get("active_profile") or paths.profile
+    )
     paths = AppPaths.resolve(home, selected_profile)
     profile_raw = _read_json(paths.profile_config_path)
     credentials = _read_json(paths.credentials_path)
@@ -227,7 +301,17 @@ def _from_parts(paths: AppPaths, profile_raw: dict[str, Any], credentials: dict[
     # Path values are derived from the selected profile and cannot be overridden
     # by profile JSON. This prevents stale absolute paths from reappearing.
     merged = _deep_merge(default, profile_raw)
-    for key in ("profile", "data_dir", "db_path", "media_dir", "state_dir", "cache_dir", "exports_dir", "wiki_dir", "credentials_path"):
+    for key in (
+        "profile",
+        "data_dir",
+        "db_path",
+        "media_dir",
+        "state_dir",
+        "cache_dir",
+        "exports_dir",
+        "wiki_dir",
+        "credentials_path",
+    ):
         merged[key] = default[key]
     merged["telegram"] = _deep_merge(merged["telegram"], credentials.get("telegram", {}))
     merged["llm"] = _deep_merge(merged["llm"], credentials.get("llm", {}))
@@ -240,6 +324,7 @@ def _profile_data(config: AppConfig) -> dict[str, Any]:
         "ai_access": asdict(config.ai_access),
         "llm": {"provider": config.llm.provider, "model": config.llm.model},
         "semantic": asdict(config.semantic),
+        "transcription": asdict(config.transcription),
     }
 
 
@@ -270,6 +355,7 @@ def _from_data(data: dict[str, Any]) -> AppConfig:
         ai_access=AIAccessPolicy(**data["ai_access"]),
         llm=LLMConfig(**data["llm"]),
         semantic=SemanticConfig(**data["semantic"]),
+        transcription=TranscriptionConfig(**data.get("transcription", {})),
     )
 
 
@@ -283,8 +369,21 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _coerce_config_value(current: Any, value: str, leaf: str) -> Any:
+    if value.lower() in {"none", "null"}:
+        if current is None or leaf in {
+            "executable",
+            "model",
+            "model_dir",
+            "language",
+            "device",
+            "compute_type",
+            "vad_filter",
+        }:
+            return None
     if isinstance(current, bool):
-        return value.lower() in {"1", "true", "yes", "on"}
+        return _coerce_bool(value, leaf)
+    if leaf == "vad_filter":
+        return _coerce_bool(value, leaf)
     if isinstance(current, list):
         if leaf.endswith("_data_classes"):
             values = [item.strip() for item in value.split(",") if item.strip()]
@@ -296,6 +395,15 @@ def _coerce_config_value(current: Any, value: str, leaf: str) -> Any:
     if isinstance(current, int) or leaf == "api_id":
         return int(value)
     return value
+
+
+def _coerce_bool(value: str, leaf: str) -> bool:
+    normalized = value.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{leaf} must be a boolean")
 
 
 def _redact(value: Any, key: str | None = None) -> Any:

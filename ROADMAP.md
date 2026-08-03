@@ -1,5 +1,7 @@
 # Roadmap
 
+[English](ROADMAP.md) | [Русский](ROADMAP.ru.md)
+
 `v0.5.0` is the current released baseline. It includes the profile-aware local archive and portable mode from `v0.2.0`, plus hardened agent safety and sync, schema v6 maintenance, budgeted agent context routing, private wiki/evidence/research memory, local hybrid retrieval, private packs, and opt-in policy-aware LLM answers.
 
 The released milestones below preserve their version history. Future work remains ordered by dependency and risk rather than by calendar date, and keeps existing CLI and JSON contracts compatible unless a future OpenSpec change explicitly declares otherwise.
