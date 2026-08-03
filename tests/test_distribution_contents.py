@@ -41,6 +41,9 @@ FORBIDDEN_PATH_PARTS = (
     ".webm",
     ".srt",
     ".webp",
+    "wiki/raw",
+    "wiki/pages",
+    "wiki/revisions",
 )
 
 

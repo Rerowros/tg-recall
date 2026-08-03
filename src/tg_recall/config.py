@@ -11,7 +11,19 @@ from .paths import AppPaths
 from .security import harden_path
 
 
-SENSITIVE_KEYS = {"api_hash", "phone", "session_path", "openai_api_key", "provider_key", "api_key", "credentials_path"}
+SENSITIVE_KEYS = {
+    "access_token",
+    "api_hash",
+    "api_key",
+    "client_secret",
+    "credentials_path",
+    "openai_api_key",
+    "phone",
+    "provider_key",
+    "provider_secret",
+    "secret",
+    "session_path",
+}
 
 
 @dataclass
@@ -25,6 +37,9 @@ class TelegramConfig:
 @dataclass
 class ProviderPolicy:
     external_llm_enabled: bool = False
+    # An empty list is a deliberate default-deny boundary. Only these two
+    # declared fields may be serialized in an external LLM request.
+    external_llm_data_classes: list[str] = field(default_factory=list)
     external_transcription_enabled: bool = False
     external_embeddings_enabled: bool = False
 
@@ -34,10 +49,25 @@ class AIAccessPolicy:
     enabled: bool = False
     allowed_chat_ids: list[int] = field(default_factory=list)
     max_results: int = 5
+    # Optional policy boundaries are deliberately permissive by default to
+    # preserve existing v0.2 configurations. Once configured, automation sees
+    # only their intersection with a command or saved sync scope.
+    allowed_since: str | None = None
+    allowed_until: str | None = None
+    allowed_media_types: str = "all"
 
 
 @dataclass
 class LLMConfig:
+    """Provider identity plus one private credential loaded outside profile JSON.
+
+    The default is intentionally local/extractive.  ``api_key`` is written
+    only by the normal profile save path into that profile's private
+    credentials file; it is never part of profile configuration or exposed
+    unredacted by config output. Explicit legacy-path saves retain their historical,
+    caller-owned monolithic format for compatibility.
+    """
+
     provider: str = "extractive"
     model: str | None = None
     api_key: str | None = None
@@ -47,6 +77,11 @@ class LLMConfig:
 class SemanticConfig:
     enabled: bool = False
     provider: str = "local-token"
+    # `sentence-transformers-local` is an opt-in path to files the user has
+    # already downloaded.  It is never interpreted as a hub model identifier.
+    model_path: str | None = None
+    device: str = "cpu"
+    batch_size: int = 32
 
 
 @dataclass
@@ -251,6 +286,12 @@ def _coerce_config_value(current: Any, value: str, leaf: str) -> Any:
     if isinstance(current, bool):
         return value.lower() in {"1", "true", "yes", "on"}
     if isinstance(current, list):
+        if leaf.endswith("_data_classes"):
+            values = [item.strip() for item in value.split(",") if item.strip()]
+            allowed = {"message_text", "metadata"}
+            if len(values) != len(set(values)) or set(values) != allowed:
+                raise ValueError("external_llm_data_classes must be exactly message_text,metadata")
+            return sorted(values)
         return [int(item.strip()) for item in value.split(",") if item.strip()]
     if isinstance(current, int) or leaf == "api_id":
         return int(value)
@@ -258,7 +299,7 @@ def _coerce_config_value(current: Any, value: str, leaf: str) -> Any:
 
 
 def _redact(value: Any, key: str | None = None) -> Any:
-    if key in SENSITIVE_KEYS and value not in (None, ""):
+    if isinstance(key, str) and key.casefold() in SENSITIVE_KEYS and value not in (None, ""):
         return "***REDACTED***"
     if isinstance(value, dict):
         return {k: _redact(v, k) for k, v in value.items()}

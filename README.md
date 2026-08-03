@@ -100,11 +100,25 @@ tg-recall export --chat -1001234567890 --since 2026-01-01 --include transcripts,
 
 The CLI can sync, download and transcribe local archives. It does not expose agent commands for authentication, credential changes, purge or Telegram write operations. MCP remains read-only.
 
+For a bounded, offline-verifiable handoff to a local AI workflow, create a separate pack; the existing `export` JSONL command is unchanged:
+
+```powershell
+tg-recall pack create project-a --chat -1001234567890 --since 2026-01-01 --max-records 200 --token-budget 12000 --json
+tg-recall pack inspect PATH\TO\project-a --json
+tg-recall pack verify PATH\TO\project-a --json
+```
+
+`pack create` requires either a concrete chat plus a date boundary or a saved scope, and always requires positive record and token budgets. It writes under the selected profile's private `exports` directory by default. A human may explicitly pass `--output`; automation cannot. To include synthesized local knowledge, pass only explicit immutable `--wiki-revision` IDs (and `--wiki-scope` when it differs from the saved scope). Packs contain selected evidence and structured assertions, never sessions, credentials, media binaries, or absolute host paths.
+
 Paste this compact instruction into Codex Custom Instructions:
 
 ```text
 Если пользователь просит посмотреть Telegram-чат, используй локальный `tg-recall`: сначала выполни `tg-recall agent guide` и следуй его workflow только для запрошенных чатов. Разрешены sync, media download и transcription; запрещены auth, purge и изменение config. Выводы подтверждай ссылками `tg://`.
 ```
+
+For cost-aware Codex model routing, progressive context budgets, and the full copy-ready prompt, see [docs/codex-agent-optimization.md](docs/codex-agent-optimization.md). The guide prefers available `gpt-5.3-codex-spark` for near-instant bounded search using its separate Codex limit, with `gpt-5.6-luna` as the stable low-cost fallback.
+
+The repository also contains local-only [private wiki memory](docs/wiki-memory.md) and [private AI export packs](docs/ai-export-packs.md). Pack creation is a profile-local CLI integration; there is no MCP pack tool, automatic wiki compiler, or automatic whole-archive export.
 
 ## MCP
 
@@ -116,10 +130,21 @@ tg-recall-mcp
 
 MCP is intentionally read-only and requires explicit `ai_access` configuration. It can list allowed cached chats and scopes, search local messages, return nearby context, and provide extractive cited retrieval.
 
+For optional genuine local-vector retrieval, first configure an already-downloaded model directory in the selected profile (`semantic.enabled=true`, `semantic.provider=sentence-transformers-local`, `semantic.model_path=PATH`) and install the optional runtime:
+
+```powershell
+uv sync --extra local-embeddings
+tg-recall index embeddings build --chat-id -1001234567890 --max-batches 1 --json
+tg-recall index embeddings status --chat-id -1001234567890 --json
+tg-recall retrieve "deadline" --chat-id -1001234567890 --retrieval-mode auto --token-budget 8000 --json
+```
+
+The model path must already exist locally; tg-recall never downloads a model. `auto` reports a keyword fallback when vectors are unavailable or stale. `semantic` is strict and returns `semantic_unavailable` rather than relabeling token overlap as vectors. `index embeddings rebuild` and `remove` are explicit human-only maintenance commands; MCP exposes only bounded `retrieve_evidence` and never builds, rebuilds, or removes an index.
+
 ## Current Limitations
 
 - `ask` is extractive cited retrieval; it does not call an LLM provider.
-- `--semantic` uses local token overlap rather than embeddings.
+- Legacy `--semantic` uses local token overlap. Use `--retrieval-mode auto|hybrid|semantic` for the optional local embedding index.
 - Local Whisper is invoked through an installed `whisper` executable; it is not bundled with the package.
 - MCP cannot sync, download, transcribe, modify configuration or purge data.
 
