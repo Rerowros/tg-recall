@@ -8,6 +8,7 @@ exits on its own rather than waiting forever for EOF.
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import sys
@@ -102,6 +103,8 @@ def parse_timeout_seconds(raw: str | None, default: float) -> float | None:
         value = float(raw.strip())
     except ValueError:
         return default
+    if not math.isfinite(value):
+        return default
     if value <= 0:
         return None
     return min(value, float(MAX_TIMEOUT_SEC))
@@ -140,8 +143,9 @@ def next_exit_reason(
     if not state.saw_tool_call and policy.unused_timeout_sec is not None:
         if now - state.started_at >= policy.unused_timeout_sec:
             return "unused_timeout"
-    if policy.idle_timeout_sec is not None and now - state.last_activity_at >= policy.idle_timeout_sec:
-        return "idle_timeout"
+    if state.saw_tool_call and policy.idle_timeout_sec is not None:
+        if now - state.last_activity_at >= policy.idle_timeout_sec:
+            return "idle_timeout"
     return None
 
 
@@ -149,7 +153,7 @@ def seconds_until_next_check(state: SessionState, policy: StdioLifecyclePolicy, 
     waits: list[float] = []
     if not state.saw_tool_call and policy.unused_timeout_sec is not None:
         waits.append(state.started_at + policy.unused_timeout_sec - now)
-    if policy.idle_timeout_sec is not None:
+    if state.saw_tool_call and policy.idle_timeout_sec is not None:
         waits.append(state.last_activity_at + policy.idle_timeout_sec - now)
     if policy.parent_watchdog:
         waits.append(PARENT_POLL_INTERVAL_SEC)
@@ -243,7 +247,7 @@ def _run_stdio_loop(
     parent_alive: Callable[[ParentSnapshot], bool],
 ) -> str:
     state = SessionState.start(clock())
-    incoming: queue.Queue[str | None] = queue.Queue()
+    incoming: queue.Queue[str | None] = queue.Queue(maxsize=1)
     reader = threading.Thread(target=_read_stdin, args=(stdin, incoming), name="tg-recall-mcp-stdin", daemon=True)
     reader.start()
     while True:

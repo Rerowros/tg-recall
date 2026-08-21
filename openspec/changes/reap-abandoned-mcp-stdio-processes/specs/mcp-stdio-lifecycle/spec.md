@@ -15,6 +15,10 @@ The stdio MCP server SHALL exit without host EOF when it has received no `tools/
 - **WHEN** the first ancestor that is not a Python, uv, or `tg-recall-mcp` wrapper dies or is replaced
 - **THEN** the server exits even if stdin is still open
 
+#### Scenario: Unused timeout disabled without a tool call
+- **WHEN** `TG_RECALL_MCP_UNUSED_TIMEOUT_SEC` is `0` and the server has received only `initialize` or `tools/list`
+- **THEN** the idle timeout does not end the process until a `tools/call` has been handled
+
 #### Scenario: Operator disables a check
 - **WHEN** `TG_RECALL_MCP_UNUSED_TIMEOUT_SEC` or `TG_RECALL_MCP_IDLE_TIMEOUT_SEC` is `0`, or `TG_RECALL_MCP_PARENT_WATCHDOG=0`
 - **THEN** the corresponding reap check is disabled and stdin EOF still ends the server
