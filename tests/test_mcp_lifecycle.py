@@ -44,6 +44,9 @@ def test_parse_timeout_seconds_defaults_zero_and_invalid() -> None:
     assert parse_timeout_seconds("-1", 600) is None
     assert parse_timeout_seconds("12.5", 600) == 12.5
     assert parse_timeout_seconds("nope", 600) == 600
+    assert parse_timeout_seconds("nan", 600) == 600
+    assert parse_timeout_seconds("inf", 600) == 600
+    assert parse_timeout_seconds("-inf", 600) == 600
 
 
 def test_parse_bool_env_defaults() -> None:
@@ -97,6 +100,14 @@ def test_unused_timeout_does_not_fire_after_tools_call() -> None:
 
     assert next_exit_reason(state, policy, now=15.0, parent_alive=True) is None
     assert next_exit_reason(state, policy, now=31.0, parent_alive=True) == "idle_timeout"
+
+
+def test_idle_timeout_does_not_fire_before_tools_call() -> None:
+    state = SessionState.start(0.0)
+    state.note_method("initialize", 1.0)
+    policy = StdioLifecyclePolicy(unused_timeout_sec=None, idle_timeout_sec=30, parent_watchdog=False)
+
+    assert next_exit_reason(state, policy, now=10_000.0, parent_alive=True) is None
 
 
 def test_parent_exit_beats_timeouts() -> None:
