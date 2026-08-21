@@ -2,6 +2,10 @@
 
 [English](CHANGELOG.md) | [Русский](CHANGELOG.ru.md)
 
+## Unreleased
+
+- Make `tg-recall-mcp` exit on stdin EOF, supervising parent death, unused timeout (`TG_RECALL_MCP_UNUSED_TIMEOUT_SEC`, default `600`), or idle timeout (`TG_RECALL_MCP_IDLE_TIMEOUT_SEC`, default `1800`). Set a timeout to `0` to disable it; set `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping.
+
 ## v0.6.0 - 2026-08-04
 
 - Add a permanent, versionless agent-setup prompt for Codex, Claude Code, Cursor, and generic harnesses, resolving only verified stable GitHub Release wheels.

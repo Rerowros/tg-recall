@@ -11,6 +11,7 @@ from .assistant import ArchiveAssistant, expand_cited_sources, knowledge_catalog
 from .config import AppConfig, load_config
 from .hybrid_retrieval import RetrievalMode, SemanticUnavailableError
 from .knowledge_catalog import KnowledgeScope
+from .mcp_lifecycle import serve_stdio
 from .models import SearchFilters
 from .security import (
     AgentOperation,
@@ -141,10 +142,13 @@ class ReadOnlyMCPServer:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string"}, "chat_id": {"type": "integer"},
-                        "scope_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                        "query": {"type": "string"},
+                        "chat_id": {"type": "integer"},
+                        "scope_id": {"type": "string"},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
                     },
-                    "required": ["query", "chat_id", "scope_id"], "additionalProperties": False,
+                    "required": ["query", "chat_id", "scope_id"],
+                    "additionalProperties": False,
                 },
             },
             {
@@ -153,7 +157,8 @@ class ReadOnlyMCPServer:
                 "inputSchema": {
                     "type": "object",
                     "properties": {"session_id": {"type": "string"}, "chat_id": {"type": "integer"}},
-                    "required": ["session_id", "chat_id"], "additionalProperties": False,
+                    "required": ["session_id", "chat_id"],
+                    "additionalProperties": False,
                 },
             },
             {
@@ -162,13 +167,15 @@ class ReadOnlyMCPServer:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string"}, "chat_id": {"type": "integer"},
+                        "session_id": {"type": "string"},
+                        "chat_id": {"type": "integer"},
                         "citations": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 8},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 8},
                         "context": {"type": "integer", "minimum": 0, "maximum": 8},
                         "token_budget": {"type": "integer", "minimum": 1, "maximum": 20000},
                     },
-                    "required": ["session_id", "chat_id", "citations"], "additionalProperties": False,
+                    "required": ["session_id", "chat_id", "citations"],
+                    "additionalProperties": False,
                 },
             },
         ]
@@ -199,7 +206,11 @@ class ReadOnlyMCPServer:
                 filters=_decision_filters(decision),
             )
             self._audit(name, arguments, len(results))
-            return {"content": [{"type": "text", "text": json.dumps([_result_dict(item) for item in results], ensure_ascii=False)}]}
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps([_result_dict(item) for item in results], ensure_ascii=False)}
+                ]
+            }
         if name == "get_message_context":
             decision = self._enforce(AgentOperation.ARCHIVE_READ, arguments)
             items = self.db.message_context(
@@ -209,7 +220,11 @@ class ReadOnlyMCPServer:
                 filters=_decision_filters(decision),
             )[: decision.result_limit or 1]
             self._audit(name, arguments, len(items))
-            return {"content": [{"type": "text", "text": json.dumps([_result_dict(item) for item in items], ensure_ascii=False)}]}
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps([_result_dict(item) for item in items], ensure_ascii=False)}
+                ]
+            }
         if name == "ask_archive":
             decision = self._enforce(AgentOperation.ARCHIVE_READ, arguments)
             answer = ArchiveAssistant(self.db, self.config).extractive_answer(
@@ -246,8 +261,12 @@ class ReadOnlyMCPServer:
                 raise AgentPolicyError(_knowledge_scope_denial(decision))
             decision = self._enforce_complete_saved_scope(saved, result_limit=arguments.get("limit"))
             payload = knowledge_catalog_lookup(
-                self.db, profile_id=self.config.profile, scope_id=arguments["scope_id"],
-                chat_ids=tuple(decision.chat_ids), query=arguments["query"], limit=decision.result_limit or 1,
+                self.db,
+                profile_id=self.config.profile,
+                scope_id=arguments["scope_id"],
+                chat_ids=tuple(decision.chat_ids),
+                query=arguments["query"],
+                limit=decision.result_limit or 1,
                 filters=_decision_filters(decision),
             )
             self._audit(name, arguments, len(payload["hits"]))
@@ -413,12 +432,7 @@ def main() -> int:
     db = Database(config.db_path)
     db.migrate()
     server = ReadOnlyMCPServer(config, db)
-    for line in sys.stdin:
-        if not line.strip():
-            continue
-        response = server.handle(json.loads(line))
-        print(json.dumps(response, ensure_ascii=False), flush=True)
-    return 0
+    return serve_stdio(server.handle)
 
 
 def legacy_main() -> int:

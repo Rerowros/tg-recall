@@ -186,6 +186,8 @@ tg-recall-mcp
 
 MCP is intentionally read-only and requires explicit `ai_access` configuration. It can list allowed cached chats and scopes, search local messages, return nearby context, and provide extractive cited retrieval.
 
+`tg-recall-mcp` is a stdio process: it exits on stdin EOF, when the supervising parent process dies, after `TG_RECALL_MCP_UNUSED_TIMEOUT_SEC` seconds (default `600`) with no `tools/call`, or after `TG_RECALL_MCP_IDLE_TIMEOUT_SEC` seconds (default `1800`) without a request. Set a timeout to `0` to disable it, or set `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping. Hosts may restart the server on the next call.
+
 For optional genuine local-vector retrieval, first configure an already-downloaded model directory in the selected profile (`semantic.enabled=true`, `semantic.provider=sentence-transformers-local`, `semantic.model_path=PATH`) and install the optional runtime:
 
 ```powershell
