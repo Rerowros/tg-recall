@@ -46,6 +46,11 @@ _SAFE_TRANSCRIPTION_DEVICE = re.compile(r"(?:auto|cpu|cuda(?::[0-9]{1,3})?)\Z")
 _SAFE_TRANSCRIPTION_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SAFE_TRANSCRIPTION_LANGUAGE = re.compile(r"[A-Za-z]+(?: [A-Za-z]+)*\Z")
 _MAX_TRANSCRIPTION_TIMEOUT_SECONDS = 3_600
+OPENROUTER_EMBEDDING_MODELS = {
+    "perplexity/pplx-embed-v1-0.6b": {"label": "Perplexity Embed 0.6B", "usd_per_million_input_tokens": 0.004},
+    "perplexity/pplx-embed-v1-4b": {"label": "Perplexity Embed 4B", "usd_per_million_input_tokens": 0.03},
+    "voyageai/voyage-4-lite": {"label": "Voyage 4 Lite", "usd_per_million_input_tokens": 0.02},
+}
 
 
 @dataclass
@@ -102,8 +107,10 @@ class SemanticConfig:
     # `sentence-transformers-local` is an opt-in path to files the user has
     # already downloaded.  It is never interpreted as a hub model identifier.
     model_path: str | None = None
+    model: str | None = None
     device: str = "cpu"
     batch_size: int = 32
+    request_timeout_seconds: int = 20
 
 
 @dataclass

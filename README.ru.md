@@ -241,6 +241,17 @@ token overlap vectors. `index embeddings rebuild` и `remove` — явные
 maintenance-команды только для человека; MCP предоставляет лишь ограниченный
 `retrieve_evidence` и никогда не строит, не перестраивает и не удаляет индекс.
 
+### Удалённые OpenRouter embeddings (явный opt-in)
+
+```powershell
+$env:OPENROUTER_API_KEY = "..." # keep this outside tg-recall config
+tg-recall --json config embeddings choices
+tg-recall config embeddings setup --provider openrouter --model perplexity/pplx-embed-v1-0.6b --allow-remote-text
+tg-recall --json index embeddings build --chat-id -1001234567890 --max-batches 1
+```
+
+`--allow-remote-text` подтверждает, что при индексации в API уходят только выбранные batch сообщений/транскриптов, а при поиске — только запрос. Vectors, checkpoints, FTS ranking и архив остаются локальными; sync не запускает фоновую переиндексацию. Поддерживаются `pplx-embed-v1-0.6b`, `pplx-embed-v1-4b` и `voyage-4-lite`; price units выводит `choices`. При отсутствии ключа, policy или API режим `auto` вернётся к FTS.
+
 ## Текущие ограничения
 
 - `ask` по умолчанию использует extractive retrieval со ссылками. Необязательный OpenAI Responses provider требует свой extra, а также явные provider-policy и scope approval; отключённые или недоступные providers возвращают cited local fallback.

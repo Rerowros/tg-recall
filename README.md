@@ -197,6 +197,17 @@ tg-recall --json retrieve "deadline" --chat-id -1001234567890 --retrieval-mode a
 
 The model path must already exist locally; tg-recall never downloads a model. `auto` reports a keyword fallback when vectors are unavailable or stale. `semantic` is strict and returns `semantic_unavailable` rather than relabeling token overlap as vectors. `index embeddings rebuild` and `remove` are explicit human-only maintenance commands; MCP exposes only bounded `retrieve_evidence` and never builds, rebuilds, or removes an index.
 
+### Remote OpenRouter embeddings (explicit opt-in)
+
+```powershell
+$env:OPENROUTER_API_KEY = "..." # keep this outside tg-recall config
+tg-recall --json config embeddings choices
+tg-recall config embeddings setup --provider openrouter --model perplexity/pplx-embed-v1-0.6b --allow-remote-text
+tg-recall --json index embeddings build --chat-id -1001234567890 --max-batches 1
+```
+
+`--allow-remote-text` acknowledges that only selected message/transcript batches are sent during indexing and only the query is sent during retrieval. Vectors, checkpoints, FTS ranking, and archive data stay local; sync never starts a background reindex. Supported choices are `pplx-embed-v1-0.6b`, `pplx-embed-v1-4b`, and `voyage-4-lite`; `choices` prints price units. `auto` falls back to FTS if the key, policy, or API is unavailable.
+
 ## Current Limitations
 
 - `ask` defaults to extractive cited retrieval. The optional OpenAI Responses provider requires its extra plus explicit provider-policy and scope approval; disabled or unavailable providers return a cited local fallback.
