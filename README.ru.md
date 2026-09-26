@@ -2,6 +2,12 @@
 
 [English](README.md) | [Русский](README.ru.md)
 
+[![CI](https://github.com/Rerowros/tg-recall/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Rerowros/tg-recall/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](pyproject.toml)
+[![PyPI](https://img.shields.io/badge/PyPI-coming%20soon-lightgrey.svg)](https://pypi.org/project/tg-recall/)
+<!-- After the first PyPI release, replace the PyPI badge image with https://img.shields.io/pypi/v/tg-recall.svg -->
+
 Local-first архив Telegram для людей и AI-агентов. `tg-recall` хранит только явно выбранные чаты в локальном профиле, индексирует текст сообщений и транскрипты и возвращает ссылки на источники вида `tg://chat/.../message/...`.
 
 > Ранняя alpha (текущий релиз: v0.6.0). Архив включает приватные переписки и пользовательскую Telegram-сессию. Храните профиль локально, используйте полное шифрование диска и проверяйте важные выводы в Telegram.
@@ -41,6 +47,41 @@ tg-recall --json doctor
 MCP, automation, lifecycle-команды и JSON-команды этого никогда не делают. См.
 [интеграцию harness](docs/harness-integration.md) для использования `update` /
 `integrate`, поддержки scope, backup и ручных fallback.
+
+## Использование с Claude Code / Codex / Cursor
+
+`tg-recall-mcp` — read-only stdio MCP-сервер. Пока вы явно не разрешите агентам конкретные чаты, он ничего не возвращает:
+
+```powershell
+tg-recall config set ai_access.enabled true
+tg-recall config set ai_access.allowed_chat_ids "-1001234567890,-1009876543210"
+```
+
+Claude Code:
+
+```powershell
+claude mcp add --scope user tg-recall -- tg-recall-mcp
+```
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.tg-recall]
+command = "tg-recall-mcp"
+args = []
+```
+
+Cursor (`~/.cursor/mcp.json` или проектный `.cursor/mcp.json`) и другие клиенты с JSON-форматом `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "tg-recall": { "command": "tg-recall-mcp", "args": [] }
+  }
+}
+```
+
+Чтобы использовать не default-профиль, задайте `TG_RECALL_PROFILE` в окружении сервера. `tg-recall integrate install --target claude-code --scope user` (или `codex` / `cursor`) записывает ту же запись плюс инструкции агенту, с backup; см. [интеграцию harness](docs/harness-integration.md). После изменения MCP-конфига перезапустите клиент.
 
 ## Постоянный bootstrap для AI-harness
 
