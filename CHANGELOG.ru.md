@@ -2,6 +2,10 @@
 
 [English](CHANGELOG.md) | **Русский**
 
+## Unreleased
+
+- `tg-recall-mcp` завершается по EOF на stdin, при смерти supervising parent, по unused timeout (`TG_RECALL_MCP_UNUSED_TIMEOUT_SEC`, по умолчанию `600`) или idle timeout (`TG_RECALL_MCP_IDLE_TIMEOUT_SEC`, по умолчанию `1800`). Таймаут `0` отключает проверку; `TG_RECALL_MCP_PARENT_WATCHDOG=0` отключает parent reaping.
+
 ## v0.6.0 - 2026-08-04
 
 - Добавлена постоянная ссылка без номера версии на инструкцию установки для Codex, Claude Code, Cursor и generic harnesses; она разрешает только проверенные wheel-файлы стабильного GitHub Release.
