@@ -61,6 +61,11 @@ from .versioning import runtime_package_version
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Agents read CLI output through pipes; on Windows those default to the ANSI
+    # code page and any emoji in a chat title or message would abort the command.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     raw_argv = _normalize_global_arguments(list(sys.argv[1:] if argv is None else argv))
     parser = build_parser()
     args = parser.parse_args(raw_argv)
