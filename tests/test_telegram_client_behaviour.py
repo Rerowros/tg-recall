@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -321,3 +322,64 @@ def _message(message_id: int, text: str, value: datetime) -> SimpleNamespace:
         document=None,
         media=None,
     )
+
+
+class _FakeTelethonBase:
+    authorized = False
+
+    def __init__(self, *args, **kwargs):
+        self.calls: list[str] = []
+
+    async def connect(self):
+        self.calls.append("connect")
+
+    async def disconnect(self):
+        self.calls.append("disconnect")
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.disconnect()
+
+    async def is_user_authorized(self):
+        return self.authorized
+
+    async def get_me(self):
+        return SimpleNamespace(id=1, username="me") if self.authorized else None
+
+    async def start(self, *args, **kwargs):
+        raise AssertionError("interactive start() must not run")
+
+    async def iter_dialogs(self, limit=None):
+        if False:
+            yield None
+
+
+def _noninteractive_client(monkeypatch, tmp_path, *, authorized: bool):
+    import tg_recall.telegram_client as module
+
+    base = type("FakeTelethon", (_FakeTelethonBase,), {"authorized": authorized})
+    monkeypatch.setattr(module, "_load_telethon", lambda: (base, FakeFloodWaitError))
+    db = Database(tmp_path / "archive.sqlite3")
+    db.migrate()
+    return TelegramArchiveClient(cfg(), db)
+
+
+def test_check_reports_unauthorized_session_without_prompting(tmp_path, monkeypatch) -> None:
+    client = _noninteractive_client(monkeypatch, tmp_path, authorized=False)
+
+    assert asyncio.run(client.check()) == {"authorized": False, "user_id": None, "username": None}
+
+
+def test_archive_operations_fail_fast_without_session(tmp_path, monkeypatch) -> None:
+    from tg_recall.telegram_client import TelegramNotAuthorizedError
+
+    client = _noninteractive_client(monkeypatch, tmp_path, authorized=False)
+
+    with pytest.raises(TelegramNotAuthorizedError, match="tg-recall telegram auth"):
+        asyncio.run(client.discover_chats())
+
+
+def test_archive_operations_run_with_saved_session(tmp_path, monkeypatch) -> None:
+    client = _noninteractive_client(monkeypatch, tmp_path, authorized=True)
+
+    assert asyncio.run(client.discover_chats()) == []
+    assert asyncio.run(client.check())["authorized"] is True
