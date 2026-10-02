@@ -16,7 +16,10 @@ from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
 import re
+import json
 from typing import Protocol, runtime_checkable
+from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 
 class SemanticUnavailableError(RuntimeError):
@@ -214,6 +217,65 @@ class SentenceTransformersLocalProvider:
         vectors = [tuple(float(value) for value in row) for row in result]
         if len(vectors) != len(texts) or any(len(vector) != self.metadata.dimensions for vector in vectors):
             raise RuntimeError("local embedding provider returned incompatible dimensions")
+        return vectors
+
+
+class OpenRouterEmbeddingProvider:
+    """Explicit remote provider: only submitted texts leave the local archive."""
+
+    endpoint = "https://openrouter.ai/api/v1/embeddings"
+    _probe = "tg-recall embedding metadata probe"
+
+    def __init__(self, model_id: str, api_key: str, *, timeout_seconds: int = 20):
+        if not api_key:
+            raise SemanticUnavailableError("openrouter_api_key_missing")
+        if timeout_seconds < 1 or timeout_seconds > 120:
+            raise ValueError("embedding request timeout must be between 1 and 120 seconds")
+        self.model_id, self._api_key, self._timeout = model_id, api_key, timeout_seconds
+        self._metadata: EmbeddingModelMetadata | None = None
+
+    @property
+    def metadata(self) -> EmbeddingModelMetadata:
+        if self._metadata is None:
+            self._set_metadata(self._request([self._probe])[0])
+        return self._metadata
+
+    def embed(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+        if not texts:
+            return []
+        vectors = self._request(texts)
+        if self._metadata is None:
+            self._set_metadata(vectors[0])
+        if any(len(vector) != self.metadata.dimensions for vector in vectors):
+            raise SemanticUnavailableError("openrouter_embedding_dimensions_incompatible")
+        return vectors
+
+    def _set_metadata(self, vector: tuple[float, ...]) -> None:
+        dimensions = len(vector)
+        if dimensions < 1:
+            raise SemanticUnavailableError("openrouter_embedding_response_invalid")
+        source_hash = sha256(f"openrouter-embeddings-v1\0{self.model_id}\0{dimensions}".encode()).hexdigest()
+        self._metadata = EmbeddingModelMetadata("openrouter", self.model_id, dimensions, source_hash)
+
+    def _request(self, texts: Sequence[str]) -> list[tuple[float, ...]]:
+        payload = json.dumps({"model": self.model_id, "input": list(texts), "encoding_format": "float"}, ensure_ascii=False).encode()
+        if len(payload) > 1_000_000:
+            raise SemanticUnavailableError("openrouter_embedding_payload_too_large")
+        request = Request(self.endpoint, data=payload, headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}, method="POST")
+        try:
+            with urlopen(request, timeout=self._timeout) as response:  # noqa: S310 - fixed HTTPS endpoint
+                body = response.read(8_000_001)
+        except (OSError, URLError):
+            raise SemanticUnavailableError("openrouter_embedding_request_failed") from None
+        if len(body) > 8_000_000:
+            raise SemanticUnavailableError("openrouter_embedding_response_invalid")
+        try:
+            data = json.loads(body.decode("utf-8"))["data"]
+            vectors = [tuple(float(value) for value in item["embedding"]) for item in data]
+        except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            raise SemanticUnavailableError("openrouter_embedding_response_invalid") from None
+        if len(vectors) != len(texts) or any(not vector for vector in vectors):
+            raise SemanticUnavailableError("openrouter_embedding_response_invalid")
         return vectors
 
 
