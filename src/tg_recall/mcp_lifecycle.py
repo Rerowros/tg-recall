@@ -271,6 +271,9 @@ def _run_stdio_loop(
             continue
         state.note_method(request_method(line), clock())
         request = json.loads(line)
+        if isinstance(request, dict) and "id" not in request:
+            # JSON-RPC notifications (e.g. notifications/initialized) never get a response.
+            continue
         if parent is None:
             response = handle(request)
         else:

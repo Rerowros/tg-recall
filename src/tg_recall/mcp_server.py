@@ -427,6 +427,10 @@ def _knowledge_scope_denial(decision: Any) -> Any:
 
 
 def main() -> int:
+    # Hosts speak UTF-8 JSON-RPC; Windows would otherwise use the ANSI code page for pipes.
+    for stream in (sys.stdin, sys.stdout):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     config = load_config()
     config.ensure_dirs()
     db = Database(config.db_path)
