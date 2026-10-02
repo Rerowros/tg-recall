@@ -2,6 +2,12 @@
 
 [English](README.md) | [Русский](README.ru.md)
 
+[![CI](https://github.com/Rerowros/tg-recall/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Rerowros/tg-recall/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](pyproject.toml)
+[![PyPI](https://img.shields.io/badge/PyPI-coming%20soon-lightgrey.svg)](https://pypi.org/project/tg-recall/)
+<!-- After the first PyPI release, replace the PyPI badge image with https://img.shields.io/pypi/v/tg-recall.svg -->
+
 Local-first Telegram archive for people and AI agents. `tg-recall` stores only explicitly selected chats in a local profile, indexes message text and transcripts, and returns source citations such as `tg://chat/.../message/...`.
 
 > Early alpha (current release: v0.6.0). The archive includes private conversations and a Telegram user session. Keep the profile local, use full-disk encryption, and verify important findings against Telegram.
@@ -40,6 +46,41 @@ non-JSON CLI command make a best-effort check; help, MCP, automation, lifecycle
 commands and JSON commands never do so. See
 [harness integration](docs/harness-integration.md) for `update` / `integrate`
 usage, scope support, backups, and manual fallbacks.
+
+## Use with Claude Code / Codex / Cursor
+
+`tg-recall-mcp` is a read-only stdio MCP server. It returns nothing until you allow specific chats for agents:
+
+```powershell
+tg-recall config set ai_access.enabled true
+tg-recall config set ai_access.allowed_chat_ids "-1001234567890,-1009876543210"
+```
+
+Claude Code:
+
+```powershell
+claude mcp add --scope user tg-recall -- tg-recall-mcp
+```
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.tg-recall]
+command = "tg-recall-mcp"
+args = []
+```
+
+Cursor (`~/.cursor/mcp.json` or project `.cursor/mcp.json`) and other `mcpServers` JSON clients:
+
+```json
+{
+  "mcpServers": {
+    "tg-recall": { "command": "tg-recall-mcp", "args": [] }
+  }
+}
+```
+
+Set `TG_RECALL_PROFILE` in the server environment to use a non-default profile. `tg-recall integrate install --target claude-code --scope user` (or `codex` / `cursor`) writes the same entry plus agent instructions with backups; see [harness integration](docs/harness-integration.md). Restart the client after changing its MCP config.
 
 ## Stable AI-harness bootstrap
 
@@ -196,6 +237,17 @@ tg-recall --json retrieve "deadline" --chat-id -1001234567890 --retrieval-mode a
 ```
 
 The model path must already exist locally; tg-recall never downloads a model. `auto` reports a keyword fallback when vectors are unavailable or stale. `semantic` is strict and returns `semantic_unavailable` rather than relabeling token overlap as vectors. `index embeddings rebuild` and `remove` are explicit human-only maintenance commands; MCP exposes only bounded `retrieve_evidence` and never builds, rebuilds, or removes an index.
+
+### Remote OpenRouter embeddings (explicit opt-in)
+
+```powershell
+$env:OPENROUTER_API_KEY = "..." # keep this outside tg-recall config
+tg-recall --json config embeddings choices
+tg-recall config embeddings setup --provider openrouter --model perplexity/pplx-embed-v1-0.6b --allow-remote-text
+tg-recall --json index embeddings build --chat-id -1001234567890 --max-batches 1
+```
+
+`--allow-remote-text` acknowledges that only selected message/transcript batches are sent during indexing and only the query is sent during retrieval. Vectors, checkpoints, FTS ranking, and archive data stay local; sync never starts a background reindex. Supported choices are `pplx-embed-v1-0.6b`, `pplx-embed-v1-4b`, and `voyage-4-lite`; `choices` prints price units. `auto` falls back to FTS if the key, policy, or API is unavailable.
 
 ## Current Limitations
 

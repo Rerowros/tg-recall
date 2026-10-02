@@ -5,7 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from .config import AppConfig
+from .config import AppConfig, OPENROUTER_EMBEDDING_MODELS
 from .context_budgeting import (
     ConservativeUtf8JsonTokenCounter,
     RetrievalBudgets,
@@ -432,12 +432,22 @@ def local_embedding_provider(config: AppConfig | None) -> EmbeddingProvider:
 
     if config is None or not config.semantic.enabled:
         raise SemanticUnavailableError("embedding_provider_unavailable")
+    from .hybrid_retrieval import LocalEmbeddingConfig, OpenRouterEmbeddingProvider
+
+    if config.semantic.provider == "openrouter":
+        if not config.provider_policy.external_embeddings_enabled:
+            raise SemanticUnavailableError("external_embeddings_disabled")
+        model = config.semantic.model
+        if model not in OPENROUTER_EMBEDDING_MODELS:
+            raise SemanticUnavailableError("openrouter_embedding_model_unavailable")
+        import os
+        return OpenRouterEmbeddingProvider(model, os.environ.get("OPENROUTER_API_KEY", ""), timeout_seconds=config.semantic.request_timeout_seconds)
+
     if config.semantic.provider != "sentence-transformers-local":
         raise SemanticUnavailableError("embedding_provider_unavailable")
     model_path = getattr(config.semantic, "model_path", None)
     if not model_path:
         raise SemanticUnavailableError("embedding_provider_unavailable")
-    from .hybrid_retrieval import LocalEmbeddingConfig
 
     return SentenceTransformersLocalProvider(
         LocalEmbeddingConfig(

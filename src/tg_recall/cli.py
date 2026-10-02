@@ -14,7 +14,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from .agent_routing import HarnessTarget, build_agent_guide
 from .assistant import ArchiveAssistant, expand_cited_sources, knowledge_catalog_lookup, local_embedding_provider
 from .backup import create_backup, restore_backup
-from .config import AppConfig, load_config, redact_config, save_config, set_config_value
+from .config import AppConfig, OPENROUTER_EMBEDDING_MODELS, load_config, redact_config, save_config, set_config_value
 from .export_packs import ExportScope, PackError, WikiPage, build_pack, inspect_pack, verify_pack
 from .media import MediaDownloader, MediaStore, copy_file_download
 from .migration import migrate_legacy
@@ -184,6 +184,18 @@ def build_parser() -> argparse.ArgumentParser:
     config_set.add_argument("key")
     config_set.add_argument("value")
     config_set.set_defaults(handler=cmd_config_set)
+    config_embeddings = config_sub.add_parser("embeddings", help="Human-only embedding provider setup")
+    config_embeddings_sub = config_embeddings.add_subparsers(dest="embedding_config_command", required=True)
+    config_choices = config_embeddings_sub.add_parser("choices", help="List local and OpenRouter embedding choices")
+    config_choices.set_defaults(handler=cmd_config_embeddings_choices)
+    config_setup = config_embeddings_sub.add_parser("setup", help="Configure disabled, local, or OpenRouter embeddings")
+    config_setup.add_argument("--provider", required=True, choices=["disabled", "local", "openrouter"])
+    config_setup.add_argument("--model", choices=sorted(OPENROUTER_EMBEDDING_MODELS))
+    config_setup.add_argument("--model-path")
+    config_setup.add_argument("--batch-size", type=int, default=32)
+    config_setup.add_argument("--timeout-seconds", type=int, default=20)
+    config_setup.add_argument("--allow-remote-text", action="store_true", help="Acknowledge selected text and queries are sent to OpenRouter")
+    config_setup.set_defaults(handler=cmd_config_embeddings_setup)
 
     telegram = sub.add_parser("telegram", help="Telegram session commands")
     telegram_sub = telegram.add_subparsers(dest="telegram_command")
@@ -970,6 +982,40 @@ def cmd_config_set(args: argparse.Namespace) -> int:
     cfg.ensure_dirs()
     save_config(cfg, args.config, home=args.home)
     return emit(args, {"set": args.key})
+
+
+def cmd_config_embeddings_choices(args: argparse.Namespace) -> int:
+    return emit(args, {"providers": [
+        {"id": "disabled", "network": False},
+        {"id": "local", "network": False, "requires": "existing --model-path"},
+        {"id": "openrouter", "network": True, "requires": "OPENROUTER_API_KEY and --allow-remote-text", "models": [
+            {"id": model, **details} for model, details in sorted(OPENROUTER_EMBEDDING_MODELS.items())
+        ]},
+    ], "remote_notice": "OpenRouter receives only selected message/transcript text during explicit indexing and search queries."})
+
+
+def cmd_config_embeddings_setup(args: argparse.Namespace) -> int:
+    require_human_confirmation("config embeddings setup", args.confirm_risk)
+    if args.batch_size < 1 or not 1 <= args.timeout_seconds <= 120:
+        raise ValueError("embedding batch size must be positive and timeout must be between 1 and 120 seconds")
+    if args.provider == "openrouter" and (not args.model or not args.allow_remote_text):
+        raise ValueError("OpenRouter setup requires --model and --allow-remote-text")
+    if args.provider == "local" and not args.model_path:
+        raise ValueError("local setup requires --model-path to an already-downloaded model")
+    cfg = load_config(args.config, home=args.home, profile=args.profile)
+    if args.provider == "disabled":
+        cfg.semantic.enabled, cfg.semantic.provider, cfg.semantic.model, cfg.semantic.model_path = False, "local-token", None, None
+        cfg.provider_policy.external_embeddings_enabled = False
+    elif args.provider == "local":
+        cfg.semantic.enabled, cfg.semantic.provider, cfg.semantic.model_path, cfg.semantic.model = True, "sentence-transformers-local", args.model_path, None
+        cfg.provider_policy.external_embeddings_enabled = False
+    else:
+        cfg.semantic.enabled, cfg.semantic.provider, cfg.semantic.model, cfg.semantic.model_path = True, "openrouter", args.model, None
+        cfg.provider_policy.external_embeddings_enabled = True
+    cfg.semantic.batch_size, cfg.semantic.request_timeout_seconds = args.batch_size, args.timeout_seconds
+    cfg.ensure_dirs()
+    save_config(cfg, args.config, home=args.home)
+    return emit(args, {"provider": args.provider, "model": cfg.semantic.model, "api_key": "OPENROUTER_API_KEY environment variable" if args.provider == "openrouter" else None})
 
 
 def cmd_telegram_auth(args: argparse.Namespace) -> int:
