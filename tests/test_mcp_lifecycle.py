@@ -242,3 +242,88 @@ def test_serve_stdio_exits_when_parent_dies() -> None:
 
     assert code == 0
     assert logs == ["tg-recall-mcp: exiting (parent_exited)"]
+
+
+def test_serve_stdio_serves_queued_request_before_idle_exit() -> None:
+    stdin, writer = _open_pipe()
+    stdout = io.StringIO()
+    logs: list[str] = []
+    policy = StdioLifecyclePolicy(unused_timeout_sec=None, idle_timeout_sec=0.05, parent_watchdog=False)
+
+    def slow_handle(request: dict[str, Any]) -> dict[str, Any]:
+        if request.get("id") == 1:
+            time.sleep(0.3)
+        return _handle(request)
+
+    try:
+        writer.write('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}\n')
+        writer.write('{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}}\n')
+        writer.flush()
+        code = serve_stdio(slow_handle, stdin=stdin, stdout=stdout, policy=policy, parent=None, log=logs.append)
+    finally:
+        writer.close()
+        stdin.close()
+
+    assert code == 0
+    assert [json.loads(line)["id"] for line in stdout.getvalue().splitlines()] == [1, 2]
+    assert logs == ["tg-recall-mcp: exiting (idle_timeout)"]
+
+
+def test_serve_stdio_exits_when_parent_dies_during_hung_handler(monkeypatch) -> None:
+    import threading
+
+    import tg_recall.mcp_lifecycle as lifecycle
+
+    monkeypatch.setattr(lifecycle, "PARENT_POLL_INTERVAL_SEC", 0.02)
+    stdin, writer = _open_pipe()
+    logs: list[str] = []
+    policy = StdioLifecyclePolicy(unused_timeout_sec=30, idle_timeout_sec=30, parent_watchdog=True)
+    parent = ParentSnapshot(pid=8680, created=1, name="codex.exe")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hung_handle(request: dict[str, Any]) -> dict[str, Any]:
+        entered.set()
+        release.wait(5)
+        return _handle(request)
+
+    try:
+        writer.write('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}\n')
+        writer.flush()
+        started = time.monotonic()
+        code = serve_stdio(
+            hung_handle,
+            stdin=stdin,
+            stdout=io.StringIO(),
+            policy=policy,
+            parent=parent,
+            parent_alive=lambda snapshot: not entered.is_set(),
+            log=logs.append,
+        )
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        writer.close()
+        stdin.close()
+
+    assert code == 0
+    assert logs == ["tg-recall-mcp: exiting (parent_exited)"]
+    assert elapsed < 2
+
+
+def test_serve_stdio_reraises_handler_errors_with_watchdog() -> None:
+    stdin = io.StringIO('{"jsonrpc":"2.0","id":1,"method":"tools/call"}\n')
+    policy = StdioLifecyclePolicy(unused_timeout_sec=None, idle_timeout_sec=None, parent_watchdog=True)
+    parent = ParentSnapshot(pid=8680, created=1, name="codex.exe")
+
+    def broken(request: dict[str, Any]) -> dict[str, Any]:
+        raise ValueError("boom")
+
+    try:
+        serve_stdio(
+            broken, stdin=stdin, stdout=io.StringIO(), policy=policy, parent=parent, parent_alive=lambda s: True
+        )
+    except ValueError as exc:
+        assert str(exc) == "boom"
+    else:
+        raise AssertionError("handler error was swallowed")

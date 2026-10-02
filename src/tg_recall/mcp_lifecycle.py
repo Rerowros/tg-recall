@@ -251,22 +251,67 @@ def _run_stdio_loop(
     reader = threading.Thread(target=_read_stdin, args=(stdin, incoming), name="tg-recall-mcp-stdin", daemon=True)
     reader.start()
     while True:
-        alive = True if parent is None else parent_alive(parent)
-        reason = next_exit_reason(state, policy, clock(), alive)
-        if reason is not None:
-            return reason
-        wait = seconds_until_next_check(state, policy, clock())
+        # A request that queued up while the previous handler ran arrived before
+        # any deadline we could compute now, so serve it before checking timeouts.
         try:
-            line = incoming.get() if wait is None else incoming.get(timeout=wait)
+            line = incoming.get_nowait()
         except queue.Empty:
-            continue
+            alive = True if parent is None else parent_alive(parent)
+            reason = next_exit_reason(state, policy, clock(), alive)
+            if reason is not None:
+                return reason
+            wait = seconds_until_next_check(state, policy, clock())
+            try:
+                line = incoming.get() if wait is None else incoming.get(timeout=wait)
+            except queue.Empty:
+                continue
         if line is None:
             return "eof"
         if not line.strip():
             continue
         state.note_method(request_method(line), clock())
-        response = handle(json.loads(line))
+        request = json.loads(line)
+        if parent is None:
+            response = handle(request)
+        else:
+            outcome = _run_watched(handle, request, parent, parent_alive)
+            if outcome is None:
+                return "parent_exited"
+            response = outcome[0]
+        state.note_method(None, clock())
         print(json.dumps(response, ensure_ascii=False), flush=True, file=stdout)
+
+
+def _run_watched(
+    handle: Callable[[dict[str, Any]], dict[str, Any]],
+    request: dict[str, Any],
+    parent: ParentSnapshot,
+    parent_alive: Callable[[ParentSnapshot], bool],
+) -> tuple[dict[str, Any]] | None:
+    """Run ``handle`` off the main thread so a hung call cannot outlive the parent.
+
+    Returns ``None`` if the supervising parent exits before the call finishes;
+    the daemon worker is then abandoned and dies with the process.
+    """
+    done = threading.Event()
+    result: list[dict[str, Any]] = []
+    error: list[BaseException] = []
+
+    def work() -> None:
+        try:
+            result.append(handle(request))
+        except BaseException as exc:  # re-raised on the main thread
+            error.append(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=work, name="tg-recall-mcp-handler", daemon=True).start()
+    while not done.wait(PARENT_POLL_INTERVAL_SEC):
+        if not parent_alive(parent):
+            return None
+    if error:
+        raise error[0]
+    return (result[0],)
 
 
 def _read_stdin(stdin: TextIO, incoming: queue.Queue[str | None]) -> None:
