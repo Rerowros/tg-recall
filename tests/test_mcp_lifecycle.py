@@ -327,3 +327,15 @@ def test_serve_stdio_reraises_handler_errors_with_watchdog() -> None:
         assert str(exc) == "boom"
     else:
         raise AssertionError("handler error was swallowed")
+
+
+def test_serve_stdio_does_not_answer_notifications() -> None:
+    stdin = io.StringIO(
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n'
+    )
+    stdout = io.StringIO()
+    policy = StdioLifecyclePolicy(unused_timeout_sec=None, idle_timeout_sec=None, parent_watchdog=False)
+
+    serve_stdio(_handle, stdin=stdin, stdout=stdout, policy=policy, parent=None)
+
+    assert [json.loads(line)["id"] for line in stdout.getvalue().splitlines()] == [2]
