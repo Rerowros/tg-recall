@@ -6,6 +6,7 @@ import re
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from functools import cache
 from typing import Any
 
 from .config import AppConfig
@@ -20,6 +21,13 @@ LINK_RE = re.compile(r"https?://\S+")
 
 class TelegramDependencyError(RuntimeError):
     pass
+
+
+class TelegramNotAuthorizedError(RuntimeError):
+    """The saved Telegram session is missing or revoked; nothing will prompt for a login."""
+
+    def __init__(self) -> None:
+        super().__init__("Telegram session is not authorized. Run `tg-recall telegram auth` in an interactive terminal.")
 
 
 class TelegramRetryPendingError(RuntimeError):
@@ -40,6 +48,27 @@ def _load_telethon() -> tuple[Any, Any]:
     return TelegramClient, FloodWaitError
 
 
+@cache
+def _noninteractive_client_class(base: type) -> type:
+    """Telethon's ``async with client`` calls ``start()``, which prompts for a phone on stdin.
+
+    CLI ``--json``, MCP and agent callers must never block on that prompt, so the
+    context manager only connects and refuses to continue without a saved session.
+    """
+
+    class NonInteractiveTelegramClient(base):  # type: ignore[misc, valid-type]
+        require_authorized = True
+
+        async def __aenter__(self) -> Any:
+            await self.connect()
+            if self.require_authorized and not await self.is_user_authorized():
+                await self.disconnect()
+                raise TelegramNotAuthorizedError()
+            return self
+
+    return NonInteractiveTelegramClient
+
+
 class TelegramArchiveClient:
     def __init__(self, config: AppConfig, db: Database):
         self.config = config
@@ -47,6 +76,7 @@ class TelegramArchiveClient:
 
     async def authorize(self) -> None:
         client = self._client()
+        client.require_authorized = False
         async with client:
             if not await client.is_user_authorized():
                 if not self.config.telegram.phone:
@@ -57,6 +87,7 @@ class TelegramArchiveClient:
 
     async def check(self) -> dict[str, Any]:
         client = self._client()
+        client.require_authorized = False
         async with client:
             authorized = await client.is_user_authorized()
             me = await client.get_me() if authorized else None
@@ -276,7 +307,7 @@ class TelegramArchiveClient:
         if not tg.api_id or not tg.api_hash:
             raise ValueError("telegram.api_id and telegram.api_hash are required")
         TelegramClient, _ = _load_telethon()
-        return TelegramClient(tg.session_path, tg.api_id, tg.api_hash)
+        return _noninteractive_client_class(TelegramClient)(tg.session_path, tg.api_id, tg.api_hash)
 
 
 def run_async(coro: Any) -> Any:
