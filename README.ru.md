@@ -263,6 +263,13 @@ MCP намеренно read-only и требует явной настройки
 разрешённые кэшированные чаты и scopes, искать локальные сообщения, возвращать
 близкий контекст и предоставлять extractive retrieval со ссылками.
 
+`tg-recall-mcp` — это stdio-процесс: он завершается по EOF на stdin, когда
+умирает supervising parent process, через `TG_RECALL_MCP_UNUSED_TIMEOUT_SEC`
+секунд (по умолчанию `600`) без `tools/call`, или через
+`TG_RECALL_MCP_IDLE_TIMEOUT_SEC` секунд (по умолчанию `1800`) без запроса.
+Таймаут `0` отключает соответствующую проверку; `TG_RECALL_MCP_PARENT_WATCHDOG=0`
+отключает parent reaping. Hosts могут перезапустить server на следующем вызове.
+
 Для необязательного настоящего local-vector retrieval сначала настройте в
 выбранном профиле уже скачанную директорию модели (`semantic.enabled=true`,
 `semantic.provider=sentence-transformers-local`, `semantic.model_path=PATH`) и
