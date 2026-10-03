@@ -324,3 +324,16 @@ class cfg_path_audit:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+def test_claude_code_shell_cannot_read_or_reconfigure_outside_allowlist(tmp_path, monkeypatch, capsys) -> None:
+    agent_archive(tmp_path)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    home = ["--home", str(tmp_path / "home"), "--json"]
+
+    assert main([*home, "search", "deadline", "--chat-id", "11"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "chat_not_allowed"
+
+    assert main([*home, "config", "set", "ai_access.allowed_chat_ids", "10,11"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "agent_operation_forbidden"

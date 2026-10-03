@@ -266,10 +266,30 @@ class SecurityFinding:
     detail: str
 
 
+AUTOMATION_ENV = ("CI", "CODEX", "AI_TERMINAL", "TG_RECALL_AI_MODE", "TG_ECOSYSTEM_AI_MODE")
+# Set by coding agents in the shells they spawn (Claude Code: CLAUDECODE=1, AI_AGENT=claude-code_...;
+# Codex: CODEX_SANDBOX*, CODEX_THREAD_ID, ...).
+AGENT_ENV = ("CLAUDECODE", "AI_AGENT")
+AGENT_ENV_PREFIXES = ("CODEX_",)
+
+
+def is_agent_environment() -> bool:
+    """Return whether a coding agent spawned this process without a human at the keyboard.
+
+    The owner's own terminal may inherit the same markers (e.g. a terminal pane
+    inside the agent app), so an interactive stdin keeps human behaviour.
+    """
+
+    if sys.stdin is not None and sys.stdin.isatty():
+        return False
+    if os.environ.get("CLAUDECODE", "").strip() in {"1", "true"} or os.environ.get("AI_AGENT", "").strip():
+        return True
+    return any(name.startswith(AGENT_ENV_PREFIXES) for name in os.environ)
+
+
 def is_automation_shell() -> bool:
-    return any(
-        os.environ.get(name, "").lower() in {"1", "true", "yes"}
-        for name in ["CI", "CODEX", "AI_TERMINAL", "TG_RECALL_AI_MODE", "TG_ECOSYSTEM_AI_MODE"]
+    return is_agent_environment() or any(
+        os.environ.get(name, "").lower() in {"1", "true", "yes"} for name in AUTOMATION_ENV
     )
 
 
@@ -289,6 +309,11 @@ def require_human_confirmation(
         if typed == CONFIRMATION_PHRASE:
             return
         raise PermissionError("confirmation phrase did not match")
+
+    if is_agent_environment():
+        # An agent can read the phrase from the source and set any variable, so
+        # the trusted-automation escape hatch is only for non-agent automation (CI).
+        raise PermissionError(f"{operation} is not available to AI agents; the owner must run it in a terminal.")
 
     if (
         os.environ.get(TRUSTED_AUTOMATION_ENV) == "1"
