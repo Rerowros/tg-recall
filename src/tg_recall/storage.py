@@ -286,6 +286,9 @@ def _validate_migration_registry() -> None:
         )
 
 
+GENERAL_TOPIC = 1  # Telegram's id of a forum's General topic
+
+
 class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -450,10 +453,41 @@ class Database:
                     continue
                 self._apply_migration(conn, migration)
             reclaimed = self._drop_obsolete_tables(conn)
+            self._infer_forum_topics(conn)
         if reclaimed:
             with sqlite3.connect(self.path) as vacuum:
                 vacuum.execute("VACUUM")
         harden_path(self.path, is_dir=False)
+
+    @staticmethod
+    def _infer_forum_topics(conn: sqlite3.Connection) -> int:
+        """Give forum messages stored before 0.7 their topic; returns rows fixed.
+
+        Older versions kept topic membership as a reply to the topic root. A
+        reply to a root becomes membership, a message without a reply is in
+        General, and a reply to another message inherits that message's topic.
+        Rows whose parent is not archived stay without a topic.
+        """
+
+        forums = "SELECT DISTINCT chat_id FROM forum_topics"
+        pending = f"m.topic_id IS NULL AND m.chat_id IN ({forums})"
+        if not conn.execute(f"SELECT 1 FROM messages m WHERE {pending} LIMIT 1").fetchone():
+            return 0
+        root = "SELECT 1 FROM forum_topics t WHERE t.chat_id = messages.chat_id AND t.topic_id = {column}"
+        pending = pending.replace("m.", "messages.")
+        fixed = conn.execute(f"UPDATE messages SET topic_id = message_id WHERE {pending} AND EXISTS ({root.format(column='messages.message_id')})").rowcount
+        fixed += conn.execute(
+            f"UPDATE messages SET topic_id = reply_to_message_id, reply_to_message_id = NULL "
+            f"WHERE {pending} AND EXISTS ({root.format(column='messages.reply_to_message_id')})"
+        ).rowcount
+        fixed += conn.execute(f"UPDATE messages SET topic_id = {GENERAL_TOPIC} WHERE {pending} AND reply_to_message_id IS NULL").rowcount
+        parent = "SELECT p.topic_id FROM messages p WHERE p.chat_id = messages.chat_id AND p.message_id = messages.reply_to_message_id"
+        for _ in range(100):  # one level of the reply chain per pass
+            step = conn.execute(f"UPDATE messages SET topic_id = ({parent}) WHERE {pending} AND ({parent}) IS NOT NULL").rowcount
+            fixed += step
+            if not step:
+                break
+        return fixed
 
     @classmethod
     def _drop_obsolete_tables(cls, conn: sqlite3.Connection) -> bool:
@@ -1184,21 +1218,22 @@ class Database:
             ]:
                 conn.execute(f"DELETE FROM {table}")
 
-    def export_messages(self, filters: SearchFilters, limit: int = 10000) -> list[dict[str, Any]]:
+    def export_messages(self, filters: SearchFilters, limit: int | None = None) -> list[dict[str, Any]]:
         where, params = _message_filter_sql("m", filters.normalized())
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
                 SELECT m.chat_id, m.message_id, m.date, m.text, m.sender_id, m.sender_name,
                        m.reply_to_message_id, m.forward_from, m.edit_date, m.has_media, m.media_type,
-                       m.links_json, c.title AS chat_title
+                       m.links_json, c.title AS chat_title, m.topic_id, t.title AS topic_title
                 FROM messages m
                 LEFT JOIN chats c ON c.chat_id = m.chat_id
+                LEFT JOIN forum_topics t ON t.chat_id = m.chat_id AND t.topic_id = m.topic_id
                 WHERE 1 = 1 {where}
                 ORDER BY m.chat_id, m.message_id
                 LIMIT ?
                 """,
-                [*params, limit],
+                [*params, -1 if limit is None else limit],
             ).fetchall()
         return [dict(row) | {"citation": f"tg://chat/{row['chat_id']}/message/{row['message_id']}"} for row in rows]
 
@@ -1290,6 +1325,9 @@ def _message_filter_sql(
         else:
             parts.append(f"{chat_alias}.chat_id IN ({', '.join('?' for _ in filters.chat_ids)})")
             params.extend(filters.chat_ids)
+    if filters.topic_id is not None:
+        parts.append(f"{message_alias}.topic_id = ?")
+        params.append(filters.topic_id)
     if filters.sender_id is not None:
         parts.append(f"{message_alias}.sender_id = ?")
         params.append(filters.sender_id)

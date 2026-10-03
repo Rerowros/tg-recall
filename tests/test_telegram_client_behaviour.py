@@ -344,3 +344,15 @@ def message_from_record(message):
     from tg_recall.telegram_client import message_from_telethon
 
     return message_from_telethon(10, message)
+
+
+def test_long_sync_reports_progress(tmp_path, monkeypatch) -> None:
+    import tg_recall.telegram_client as module
+
+    monkeypatch.setattr(module, "PROGRESS_SECONDS", 0.0)
+    client, _ = _client_with(tmp_path, monkeypatch, PlainChat())
+    seen = []
+
+    asyncio.run(client.sync_many([(10, None)], since=datetime(2026, 1, 1, tzinfo=UTC), progress=seen.append))
+
+    assert seen and seen[-1]["chat_id"] == 10 and seen[-1]["fetched"] == len(seen)
