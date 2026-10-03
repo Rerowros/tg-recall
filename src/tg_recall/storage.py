@@ -2131,6 +2131,7 @@ class Database:
                 media_type=filters.media_type,
                 media_types=filters.media_types,
                 has_link=filters.has_link,
+                chat_ids=filters.chat_ids,
             )
         filters = filters.normalized()
         with self.connect() as conn:
@@ -2200,6 +2201,9 @@ class Database:
         if filters.chat_id is not None:
             where_parts.append("si.chat_id = ?")
             params.append(filters.chat_id)
+        if filters.chat_ids is not None:
+            where_parts.append(f"si.chat_id IN ({', '.join('?' for _ in filters.chat_ids)})" if filters.chat_ids else "1 = 0")
+            params.extend(filters.chat_ids)
         where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with self.connect() as conn:
             rows = conn.execute(
@@ -2759,6 +2763,12 @@ def _message_filter_sql(
     if filters.chat_id is not None:
         parts.append(f"{chat_alias}.chat_id = ?")
         params.append(filters.chat_id)
+    if filters.chat_ids is not None:
+        if not filters.chat_ids:
+            parts.append("1 = 0")
+        else:
+            parts.append(f"{chat_alias}.chat_id IN ({', '.join('?' for _ in filters.chat_ids)})")
+            params.extend(filters.chat_ids)
     if filters.sender_id is not None:
         parts.append(f"{message_alias}.sender_id = ?")
         params.append(filters.sender_id)
