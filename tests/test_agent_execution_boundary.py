@@ -263,7 +263,7 @@ def test_agent_sync_needs_allow_sync_then_resolves_links_within_the_allowlist(tm
     db.upsert_forum_topics(10, [(1, "General"), (157, "Русский")])
     calls = []
 
-    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none"):
+    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", progress=None):
         assert since is None or since.tzinfo is not None
         calls.append((targets, since.astimezone().date().isoformat() if since else None, media))
         return [{"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 3, "complete": True,
