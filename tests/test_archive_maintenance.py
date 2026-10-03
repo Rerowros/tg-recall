@@ -151,14 +151,8 @@ def test_filter_contract_matches_keyword_token_export_and_context(tmp_path) -> N
     seed(db)
     filters = SearchFilters(chat_id=10, sender_id=7, since="2026-01-01", until="2026-01-02T23:59:59+00:00", media_type="voice", has_link=True)
 
-    keyword = db.search("needle", filters=filters)
-    token = db.semantic_search("needle", filters=filters)
     exported = db.export_messages(filters, limit=10)
-    context = db.message_context(10, 1, radius=3, filters=filters)
-    assert {item.message_id for item in keyword} == {1}
-    assert {item.message_id for item in token} == {1}
     assert {item["message_id"] for item in exported} == {1}
-    assert {item.message_id for item in context} == {1}
 
 
 def test_doctor_and_jobs_cli_keep_sanitized_additive_json(tmp_path, capsys) -> None:

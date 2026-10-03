@@ -38,8 +38,6 @@ WRAPPER_PROCESS_NAMES = frozenset(
         "python3.exe",
         "tg-recall-mcp",
         "tg-recall-mcp.exe",
-        "tg-ecosystem-mcp",
-        "tg-ecosystem-mcp.exe",
         "uv",
         "uv.exe",
     }

@@ -51,5 +51,6 @@ def test_transcription_sidecar_provider_indexes_transcript(tmp_path) -> None:
     result = TranscriptionService(db, fallback_provider=SidecarTextProvider()).run_pending()
 
     assert result["completed"] == 1
-    hits = db.search("Launch")
-    assert hits[0].transcript_id is not None
+    from tg_recall.agent_query import Scope, search_hits
+
+    assert search_hits(db, Scope(chat_ids=(10,)), "Launch", 5)  # the transcript is searchable

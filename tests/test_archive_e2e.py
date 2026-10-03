@@ -4,9 +4,9 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from tg_recall.assistant import ArchiveAssistant
+from tg_recall.agent_tools import AgentTools
 from tg_recall.config import AppConfig
-from tg_recall.models import ChatRecord, MessageRecord, SearchFilters
+from tg_recall.models import ChatRecord, MessageRecord
 from tg_recall.storage import Database
 
 
@@ -36,25 +36,27 @@ def load_fixture(db: Database) -> int:
     return media_id
 
 
-def test_end_to_end_fixture_search_and_context(tmp_path) -> None:
+def owner(db: Database) -> AgentTools:
+    return AgentTools(AppConfig.default(), db, owner=True)
+
+
+def test_owner_search_finds_messages_and_transcripts_with_citations(tmp_path) -> None:
     db = Database(tmp_path / "archive.sqlite3")
     load_fixture(db)
 
-    results = db.search("deadline", filters=SearchFilters(chat_id=10, has_link=True))
-    context = ArchiveAssistant(db, AppConfig.default()).retrieve("budget deadline", chat_id=10)
-    answer = ArchiveAssistant(db, AppConfig.default()).answer("budget deadline", chat_id=10)
+    text = owner(db).search({"query": "deadline"}).text
+    voice = owner(db).search({"query": "budget approval"}).text
 
-    assert results[0].message_id == 100
-    assert "tg://chat/10/message/" in context.as_prompt_context()
-    assert "Local extractive answer" in answer
+    assert ">100 " in text and "tg://chat/10/message/100" in text
+    assert ">101 " in voice and "«The budget approval deadline is next Monday»" in voice
 
 
-def test_metadata_and_semantic_search(tmp_path) -> None:
+def test_owner_filters_by_sender_and_reads_a_period(tmp_path) -> None:
     db = Database(tmp_path / "archive.sqlite3")
     load_fixture(db)
 
-    by_sender = db.search("deadline", filters=SearchFilters(chat_id=10, sender_id=7))
-    semantic = db.semantic_search("approval budget", filters=SearchFilters(chat_id=10))
+    by_sender = owner(db).search({"query": "deadline", "from": "Ada"}).text
+    period = owner(db).read({"chats": 10, "since": "2025-12-31", "until": "2026-01-03"}).text
 
-    assert by_sender[0].message_id == 100
-    assert semantic[0].message_id == 101
+    assert ">100 " in by_sender and ">101 " not in by_sender
+    assert period.index("deadline moved") < period.index("Voice note")

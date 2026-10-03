@@ -64,10 +64,8 @@ def test_mcp_tools_list_is_small_read_only_surface(tmp_path) -> None:
     names = [tool["name"] for tool in server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]]
 
     assert names == ["search", "read", "chats"]
-    research = server_with_data(tmp_path / "r", [10], mcp_research_tools=True)
-    research_names = [tool["name"] for tool in research.tools()]
-    assert research_names[3:] == ["query_knowledge_catalog", "inspect_research_session", "expand_cited_sources"]
-    assert not ({"update", "integrate", "auth", "purge", "config", "send_message"} & set(research_names))
+    with_sync = [tool["name"] for tool in server_with_data(tmp_path / "s", [10], allow_sync=True).tools()]
+    assert with_sync == ["search", "read", "chats", "sync"]
 
 
 def test_search_covers_all_allowed_chats_without_chat_id_and_never_others(tmp_path) -> None:
@@ -252,16 +250,16 @@ def test_sync_tool_is_opt_in_and_scoped(tmp_path, monkeypatch) -> None:
     assert "sync" in [tool["name"] for tool in server.tools()]
     seen = []
 
-    async def fake_sync(self, chat_id, *, topic_id=None, since=None, max_seconds=60.0, max_messages=100_000):
-        seen.append((chat_id, topic_id, since is not None))
-        return {"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 40, "complete": True, "retry_after": None,
-                "stored": 42, "oldest_date": (NOW - timedelta(days=30)).isoformat(), "newest_date": NOW.isoformat()}
+    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none"):
+        seen.append((targets, since is not None))
+        return [{"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 40, "complete": True, "retry_after": None,
+                 "stored": 42, "oldest_date": (NOW - timedelta(days=30)).isoformat(), "newest_date": NOW.isoformat()}
+                for chat_id, topic_id in targets]
 
-    monkeypatch.setattr(TelegramArchiveClient, "sync_chat", fake_sync)
+    monkeypatch.setattr(TelegramArchiveClient, "sync_many", fake_sync_many)
     text = text_of(call(server, "sync", {"chats": "https://t.me/AcmeChat/157", "since": "2026-01-01"}))
-    assert seen == [(-100, 157, True)]
-    assert "Acme /157 Русский: +40 fetched · 42 stored" in text and "complete" in text
-    assert "read(chats=['-100/157']" in text
+    assert seen == [([(-100, 157)], True)]
+    assert "Acme /157 Русский: +40 · 42 stored" in text and "complete" in text
 
     outside = call(server, "sync", {"chats": 11})
     assert outside["result"]["isError"] is True and "chat_not_allowed" in text_of(outside)
@@ -269,6 +267,38 @@ def test_sync_tool_is_opt_in_and_scoped(tmp_path, monkeypatch) -> None:
     async def busy(self, *args, **kwargs):
         raise TelegramBusyError()
 
-    monkeypatch.setattr(TelegramArchiveClient, "sync_chat", busy)
+    monkeypatch.setattr(TelegramArchiveClient, "sync_many", busy)
     response = call(server, "sync", {"chats": 10})
     assert response["result"]["isError"] is True and text_of(response).startswith("busy")
+
+
+def test_search_auto_refreshes_stale_chats_and_survives_a_busy_session(tmp_path, monkeypatch) -> None:
+    from tg_recall.telegram_client import TelegramArchiveClient, TelegramBusyError
+
+    server = server_with_data(tmp_path, [10, 12], allow_sync=True)
+    refreshed = []
+
+    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none"):
+        refreshed.append(sorted(targets))
+        for chat_id, _ in targets:
+            self.db.update_sync_state(chat_id, retry_after=None)
+        return [{"chat_id": chat_id, "topic_id": None, "fetched": 2} for chat_id, _ in targets]
+
+    monkeypatch.setattr(TelegramArchiveClient, "sync_many", fake_sync_many)
+    first = text_of(call(server, "search", {"query": "deadline"}))
+    second = text_of(call(server, "search", {"query": "deadline"}))
+    assert refreshed == [[(10, None), (12, None)]]  # once; then the chats are fresh
+    assert "refreshed 2 chats (+4)" in first and "refreshed" not in second
+
+    async def busy(self, *args, **kwargs):
+        raise TelegramBusyError()
+
+    monkeypatch.setattr(TelegramArchiveClient, "sync_many", busy)
+    server.config.ai_access.auto_refresh_minutes = 0
+    assert "refresh" not in text_of(call(server, "search", {"query": "deadline"}))
+    server.config.ai_access.auto_refresh_minutes = 10
+    with server.db.connect() as conn:
+        conn.execute("UPDATE sync_state SET last_synced_at = '2000-01-01T00:00:00+00:00'")
+    stale = text_of(call(server, "search", {"query": "deadline"}))
+    assert "deadline" in stale and "refresh skipped: busy" in stale
+
