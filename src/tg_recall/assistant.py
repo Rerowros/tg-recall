@@ -761,4 +761,5 @@ def _filters_for_chat(filters: SearchFilters | None, chat_id: int) -> SearchFilt
         media_type=base.media_type,
         media_types=base.media_types,
         has_link=base.has_link,
+        chat_ids=base.chat_ids,
     ).normalized()

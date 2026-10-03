@@ -54,10 +54,19 @@ class SearchFilters:
     media_type: str | None = None
     media_types: tuple[str, ...] | None = None
     has_link: bool | None = None
+    chat_ids: tuple[int, ...] | None = None
 
     def normalized(self) -> "SearchFilters":
         if self.chat_id is not None and (isinstance(self.chat_id, bool) or not isinstance(self.chat_id, int)):
             raise ValueError("chat_id filter must be an integer")
+        chat_ids = None
+        if self.chat_ids is not None:
+            if any(isinstance(value, bool) or not isinstance(value, int) for value in self.chat_ids):
+                raise ValueError("chat_ids filter must contain integers")
+            chat_ids = tuple(sorted(set(self.chat_ids)))
+            if self.chat_id is not None:
+                # Both set: the single chat must lie inside the set, otherwise nothing matches.
+                chat_ids = (self.chat_id,) if self.chat_id in chat_ids else ()
         if self.sender_id is not None and (isinstance(self.sender_id, bool) or not isinstance(self.sender_id, int)):
             raise ValueError("sender_id filter must be an integer")
         for value in (self.since, self.until):
@@ -75,7 +84,16 @@ class SearchFilters:
             raise ValueError("media_type and media_types filters cannot be combined")
         if self.has_link is not None and not isinstance(self.has_link, bool):
             raise ValueError("has_link filter must be boolean")
-        return SearchFilters(self.chat_id, self.sender_id, self.since, self.until, self.media_type, values, self.has_link)
+        return SearchFilters(
+            chat_id=self.chat_id,
+            sender_id=self.sender_id,
+            since=self.since,
+            until=self.until,
+            media_type=self.media_type,
+            media_types=values,
+            has_link=self.has_link,
+            chat_ids=chat_ids,
+        )
 
 
 def _parse_filter_date(value: str) -> None:
