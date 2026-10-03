@@ -74,10 +74,16 @@ class AIAccessPolicy:
     instructions_list_chats: bool = False
     # Let agents download allowed chats/topics from Telegram over MCP (reads Telegram, writes only the local archive).
     allow_sync: bool = False
-    # Wall-clock limit of one MCP sync call; it resumes on the next call.
-    sync_max_seconds: int = 50
+    # How long one MCP sync call waits for the result; a longer download continues in the background.
+    sync_max_seconds: int = 20
+    # Limit of one background download started by MCP sync.
+    sync_background_minutes: int = 30
     # With allow_sync, search/read first pull new messages for chats synced longer ago than this (0 = off).
     auto_refresh_minutes: int = 10
+    # Messages one agent `export` file may hold (0 = agents cannot export).
+    max_export_messages: int = 50000
+    # Let agents download and transcribe cited voice/audio/video over MCP (reads Telegram, runs local speech-to-text).
+    allow_transcribe: bool = False
 
 
 @dataclass

@@ -355,4 +355,5 @@ def test_long_sync_reports_progress(tmp_path, monkeypatch) -> None:
 
     asyncio.run(client.sync_many([(10, None)], since=datetime(2026, 1, 1, tzinfo=UTC), progress=seen.append))
 
-    assert seen and seen[-1]["chat_id"] == 10 and seen[-1]["fetched"] == len(seen)
+    assert seen[0]["fetched"] == 0 and seen[0]["date"] is None  # announced before the first page
+    assert seen[-1]["chat_id"] == 10 and seen[-1]["fetched"] == len(seen) - 1
