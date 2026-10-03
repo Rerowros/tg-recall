@@ -410,10 +410,7 @@ def test_long_sync_returns_early_and_reports_progress_then_results(tmp_path, mon
 
     monkeypatch.setattr(TelegramArchiveClient, "sync_many", slow_sync_many)
     started = text_of(call(server, "sync", {"chats": "Acme/157", "since": "2026-01-01"}))
-    assert (
-        started.startswith("sync running in background")
-        and "Acme /157: 5000 msgs of ~19000 on Telegram" in started
-    )
+    assert started.startswith("sync running in background") and "Acme /157: 5000 msgs of ~19000 on Telegram" in started
 
     during = text_of(call(server, "read", {"chats": "Acme/157", "since": "7d"}))
     assert "sync running in background: Acme /157" in during  # reads work meanwhile
@@ -488,3 +485,19 @@ def test_sync_job_eta_follows_the_download_direction() -> None:
     forwards = job.eta_seconds((1, None))  # towards now: 40 days left
 
     assert 35 < backwards < 45 and 35 < forwards < 45
+
+
+def test_stats_counts_voice_transcripts_once_like_search(tmp_path) -> None:
+    server = server_with_data(tmp_path, [10])
+    db = server.db
+    db.upsert_message(
+        MessageRecord(
+            chat_id=10, message_id=4, date=NOW - timedelta(hours=1), text="", has_media=True, media_type="voice"
+        )
+    )
+    db.insert_transcript(db.enqueue_media(10, 4, "voice", "4", "off"), "fixture", "the deadline is tomorrow")
+    db.insert_transcript(db.enqueue_media(10, 1, "voice", "1", "off"), "fixture", "deadline again")  # text also matches
+
+    text = text_of(call(server, "stats", {"query": "deadline"}))
+
+    assert "· 2 hits for 'deadline'" in text  # message 1 once, voice 4 via its transcript

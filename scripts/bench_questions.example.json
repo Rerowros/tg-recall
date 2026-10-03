@@ -1,0 +1,23 @@
+[
+  {
+    "id": "fact-outage",
+    "kind": "find a fact",
+    "question": "When did payments last fail in the Acme project chat, and how long did it take to fix?",
+    "must": ["September"],
+    "expect": "Date and duration from the announcement; graded by the 'must' keywords plus a manual look"
+  },
+  {
+    "id": "count-busiest-month",
+    "kind": "counts",
+    "question": "Which month had the most messages in the Acme chat, and how many?",
+    "must": ["June"],
+    "expect": "A good run answers with one stats() call"
+  },
+  {
+    "id": "bulk-month-summary",
+    "kind": "bulk",
+    "question": "Summarise the top 5 user complaints in the Acme chat in June, with dates.",
+    "must": ["June"],
+    "expect": "A good run uses stats() and export() or a few searches, not page after page of read()"
+  }
+]

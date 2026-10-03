@@ -12,14 +12,14 @@
 
 Telegram он только читает: никогда ничего не отправляет, не редактирует и не помечает прочитанным.
 
-> Alpha (текущий релиз: v0.8.0). В архиве лежат личные переписки и пользовательская Telegram-сессия: храните профиль локально, используйте полное шифрование диска и проверяйте важные выводы в Telegram. Обновляетесь с v0.6 или старше? В v0.7.0 удалено много функций — прочитайте [журнал изменений](CHANGELOG.ru.md) и сначала сделайте backup.
+> Alpha (текущий релиз: v0.8.1). В архиве лежат личные переписки и пользовательская Telegram-сессия: храните профиль локально, используйте полное шифрование диска и проверяйте важные выводы в Telegram. Обновляетесь с v0.6 или старше? В v0.7.0 удалено много функций — прочитайте [журнал изменений](CHANGELOG.ru.md) и сначала сделайте backup.
 
 ## Установка
 
 Нужен Python 3.13+.
 
 ```powershell
-uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.8.0/tg_recall-0.8.0-py3-none-any.whl
+uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.8.1/tg_recall-0.8.1-py3-none-any.whl
 ```
 
 Ставится универсальный wheel из [GitHub Release](https://github.com/Rerowros/tg-recall/releases) (сверьте SHA-256, который показывает GitHub). Обновление — та же команда с URL нового релиза и `--force`. `uv tool install tg-recall` / `pip install tg-recall` заработают, когда пакет появится в PyPI.

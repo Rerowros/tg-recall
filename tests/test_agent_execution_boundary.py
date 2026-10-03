@@ -30,7 +30,9 @@ def agent_archive(tmp_path) -> tuple[AppConfig, Database]:
     db.upsert_chat(ChatRecord(chat_id=10, title="Allowed", chat_type="group"))
     db.upsert_chat(ChatRecord(chat_id=11, title="Hidden", chat_type="group"))
     db.upsert_message(MessageRecord(chat_id=10, message_id=1, date=datetime(2026, 1, 2, tzinfo=UTC), text="deadline"))
-    db.upsert_message(MessageRecord(chat_id=10, message_id=2, date=datetime(2025, 12, 2, tzinfo=UTC), text="old deadline"))
+    db.upsert_message(
+        MessageRecord(chat_id=10, message_id=2, date=datetime(2025, 12, 2, tzinfo=UTC), text="old deadline")
+    )
     return cfg, db
 
 
@@ -130,12 +132,21 @@ def test_agent_export_cannot_escape_private_exports_directory(tmp_path, monkeypa
     _, _ = agent_archive(tmp_path)
     monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
 
-    assert main(
-        [
-            "--home", str(tmp_path / "home"), "--json", "export", "--chat", "10",
-            "--output", str(tmp_path / "outside.jsonl"),
-        ]
-    ) == 1
+    assert (
+        main(
+            [
+                "--home",
+                str(tmp_path / "home"),
+                "--json",
+                "export",
+                "--chat",
+                "10",
+                "--output",
+                str(tmp_path / "outside.jsonl"),
+            ]
+        )
+        == 1
+    )
     denied = json.loads(capsys.readouterr().out)
     assert denied["error"]["code"] == "private_export_path_required"
     assert not (tmp_path / "outside.jsonl").exists()
@@ -188,7 +199,9 @@ def test_agent_cli_caps_scoped_read_and_returns_stable_denial(tmp_path, monkeypa
     cfg, _ = agent_archive(tmp_path)
     monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
 
-    assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat", "10", "--limit", "20"]) == 0
+    assert (
+        main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat", "10", "--limit", "20"]) == 0
+    )
     payload = json.loads(capsys.readouterr().out)
     assert payload["count"] == 1  # max_results=1
     assert ">1 " in payload["text"] and "old deadline" not in payload["text"]  # allowed_since bound
@@ -208,14 +221,28 @@ def test_media_policy_is_the_same_for_cli_and_mcp_and_dates_bound_context(tmp_pa
     save_config(cfg, home=tmp_path / "home")
     for message_id, media in ((3, "voice"), (4, "document")):
         db.upsert_message(
-            MessageRecord(chat_id=10, message_id=message_id, date=datetime(2026, 1, message_id, tzinfo=UTC), text=f"deadline {media}", has_media=True, media_type=media)
+            MessageRecord(
+                chat_id=10,
+                message_id=message_id,
+                date=datetime(2026, 1, message_id, tzinfo=UTC),
+                text=f"deadline {media}",
+                has_media=True,
+                media_type=media,
+            )
         )
     monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
-    assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat", "10", "--context", "0"]) == 0
+    assert (
+        main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat", "10", "--context", "0"]) == 0
+    )
     cli_cites = json.loads(capsys.readouterr().out)["text"].split("cite: ", 1)[1].split()[:2]
 
     mcp_rows = ReadOnlyMCPServer(cfg, db).handle(
-        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "search", "arguments": {"query": "deadline", "chat_id": 10, "context": 0}}}
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "search", "arguments": {"query": "deadline", "chat_id": 10, "context": 0}},
+        }
     )
     mcp_cites = mcp_rows["result"]["content"][0]["text"].split("cite: ", 1)[1].split()
     # Disallowed media is hidden, plain text stays, the date bound still applies.
@@ -223,7 +250,12 @@ def test_media_policy_is_the_same_for_cli_and_mcp_and_dates_bound_context(tmp_pa
 
     cfg.ai_access.allowed_media_types = "all"
     context = ReadOnlyMCPServer(cfg, db).handle(
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "read", "arguments": {"refs": ["10/3"], "before": 2, "after": 0}}}
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "read", "arguments": {"refs": ["10/3"], "before": 2, "after": 0}},
+        }
     )
     window = context["result"]["content"][0]["text"]
     assert ">3 " in window and "\n 1 " in window
@@ -249,7 +281,9 @@ def test_allow_all_chats_opens_every_archived_chat_but_keeps_policy_dates(tmp_pa
     cfg.ai_access.allow_all_chats = True
     cfg.ai_access.max_results = 10
     save_config(cfg, home=tmp_path / "home")
-    db.upsert_message(MessageRecord(chat_id=11, message_id=5, date=datetime(2026, 1, 5, tzinfo=UTC), text="hidden deadline"))
+    db.upsert_message(
+        MessageRecord(chat_id=11, message_id=5, date=datetime(2026, 1, 5, tzinfo=UTC), text="hidden deadline")
+    )
     monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
 
     assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--limit", "10"]) == 0
@@ -263,11 +297,26 @@ def test_agent_sync_needs_allow_sync_then_resolves_links_within_the_allowlist(tm
     db.upsert_forum_topics(10, [(1, "General"), (157, "Русский")])
     calls = []
 
-    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", progress=None):
+    async def fake_sync_many(
+        self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", progress=None
+    ):
         assert since is None or since.tzinfo is not None
         calls.append((targets, since.astimezone().date().isoformat() if since else None, media))
-        return [{"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 3, "complete": True,
-                 "retry_after": None, "stored": 3, "oldest_date": None, "newest_date": None} for chat_id, topic_id in targets]
+        assert max_seconds == 90.0  # an agent shell gets a short run, not the owner's hour
+        return [
+            {
+                "chat_id": chat_id,
+                "topic_id": topic_id,
+                "forum": True,
+                "fetched": 3,
+                "complete": True,
+                "retry_after": None,
+                "stored": 3,
+                "oldest_date": None,
+                "newest_date": None,
+            }
+            for chat_id, topic_id in targets
+        ]
 
     monkeypatch.setattr(TelegramArchiveClient, "sync_many", fake_sync_many)
     monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
