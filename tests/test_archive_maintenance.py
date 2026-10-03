@@ -42,8 +42,8 @@ def test_migration_failure_rolls_back_and_newer_schema_is_not_downgraded(tmp_pat
     db = Database(tmp_path / "archive.sqlite3")
     db.migrate()
     original_registry = storage_module.MIGRATION_REGISTRY
-    bad = Migration(7, "rollback-test", ("CREATE TABLE must_rollback (id INTEGER)", "INSERT INTO missing_table VALUES (1)"))
-    monkeypatch.setattr(storage_module, "SCHEMA_VERSION", 7)
+    bad = Migration(SCHEMA_VERSION + 1, "rollback-test", ("CREATE TABLE must_rollback (id INTEGER)", "INSERT INTO missing_table VALUES (1)"))
+    monkeypatch.setattr(storage_module, "SCHEMA_VERSION", SCHEMA_VERSION + 1)
     monkeypatch.setattr(storage_module, "MIGRATION_REGISTRY", (*original_registry, bad))
     with pytest.raises(Exception, match="missing_table"):
         db.migrate()
@@ -71,8 +71,8 @@ def test_malformed_migration_registry_fails_before_schema_writes(tmp_path, monke
     db.migrate()
     with db.connect() as conn:
         before = [tuple(row) for row in conn.execute("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY type, name")]
-    malformed = (storage_module.MIGRATION_REGISTRY[0], Migration(7, "skips-v3", ("CREATE TABLE should_not_exist (id INTEGER)",)))
-    monkeypatch.setattr(storage_module, "SCHEMA_VERSION", 7)
+    malformed = (storage_module.MIGRATION_REGISTRY[0], Migration(SCHEMA_VERSION + 1, "skips-v3", ("CREATE TABLE should_not_exist (id INTEGER)",)))
+    monkeypatch.setattr(storage_module, "SCHEMA_VERSION", SCHEMA_VERSION + 1)
     monkeypatch.setattr(storage_module, "MIGRATION_REGISTRY", malformed)
     with pytest.raises(SchemaCompatibilityError, match="registry"):
         db.migrate()

@@ -350,6 +350,6 @@ def test_mcp_ask_is_read_only_extractive_even_with_an_external_provider_configur
     cfg, db = configured_archive(tmp_path)
     monkeypatch.setattr("tg_recall.assistant.OpenAIResponsesProvider", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("MCP must not construct provider")))
     response = ReadOnlyMCPServer(cfg, db).handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-        "name": "ask_archive", "arguments": {"query": "deadline", "chat_id": 10},
+        "name": "search", "arguments": {"query": "deadline", "chats": 10},
     }})
     assert "tg://chat/10/message/7" in response["result"]["content"][0]["text"]
