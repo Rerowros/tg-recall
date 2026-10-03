@@ -92,3 +92,52 @@ def test_migrate_drops_removed_feature_tables_but_keeps_authored_data(tmp_path) 
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert not {"semantic_index", "sync_scopes", "research_sessions", "embedding_vectors"} & tables
     assert "wiki_snapshots" in tables  # holds data, left alone
+
+
+def _forum_archive(tmp_path, path=None) -> Database:
+    db = Database(path or tmp_path / "archive.sqlite3")
+    db.migrate()
+    db.upsert_chat(ChatRecord(chat_id=10, title="Forum", chat_type="supergroup"))
+    db.upsert_forum_topics(10, [(1, "General"), (157, "Russian")])
+    when = datetime(2026, 1, 1, tzinfo=UTC)
+    # Rows as versions before 0.7 stored them: topic membership kept as a reply to the root.
+    for message_id, reply_to in ((157, None), (200, 157), (201, 200), (202, 201), (203, None), (204, 999)):
+        db.upsert_message(MessageRecord(chat_id=10, message_id=message_id, date=when, text=f"m{message_id}", reply_to_message_id=reply_to))
+    return db
+
+
+def test_migrate_gives_old_forum_rows_their_topic(tmp_path) -> None:
+    db = _forum_archive(tmp_path)
+
+    db.migrate()
+
+    with db.connect() as conn:
+        rows = {row[0]: (row[1], row[2]) for row in conn.execute("SELECT message_id, topic_id, reply_to_message_id FROM messages")}
+    assert rows[157] == (157, None) and rows[200] == (157, None)  # membership is not a reply
+    assert rows[201] == (157, 200) and rows[202] == (157, 201)  # a reply chain inherits the topic
+    assert rows[203] == (1, None) and rows[204] == (None, 999)  # General; unknown parent stays open
+
+
+def test_export_filters_one_topic_without_a_hidden_cap(tmp_path) -> None:
+    db = _forum_archive(tmp_path)
+    db.migrate()
+
+    rows = db.export_messages(SearchFilters(chat_id=10, topic_id=157))
+
+    assert [row["message_id"] for row in rows] == [157, 200, 201, 202]
+    assert {row["topic_title"] for row in rows} == {"Russian"}
+
+
+def test_cli_export_takes_a_topic_reference(tmp_path, capsys) -> None:
+    from tg_recall.cli import _export_ref, main
+
+    assert _export_ref("https://t.me/c/1234567890/157") == (-1001234567890, 157)
+    assert _export_ref("-1001234567890") == (-1001234567890, None)
+    home = tmp_path / "home"
+    cfg = AppConfig.default(home)
+    save_config(cfg, home=home)
+    _forum_archive(tmp_path, cfg.db_path)
+
+    assert main(["--home", str(home), "--json", "export", "--chat", "10/157", "--output", str(tmp_path / "t.jsonl")]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["messages"] == 4 and result["topic_id"] == 157 and "truncated" not in result

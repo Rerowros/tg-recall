@@ -9,7 +9,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from functools import cache
-from typing import Any
+from typing import Any, Callable
 
 from .config import AppConfig
 from .media import MediaStore, sha256_file
@@ -25,6 +25,8 @@ WRITE_BATCH = 200
 SYNC_WAIT_SECONDS = 0.3
 # How far back the first sync of a chat goes when no --since is given.
 FIRST_SYNC = timedelta(days=30)
+# How often a long sync reports progress to its caller.
+PROGRESS_SECONDS = 10.0
 
 
 class TelegramDependencyError(RuntimeError):
@@ -326,6 +328,7 @@ class TelegramArchiveClient:
         max_seconds: float = 60.0,
         max_messages: int = 100_000,
         media: str = "none",
+        progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> list[dict[str, Any]]:
         """Bring chats (or forum topics) up to date over one Telegram connection.
 
@@ -335,6 +338,8 @@ class TelegramArchiveClient:
         chat never synced before starts ``FIRST_SYNC`` back. A forum topic is
         fetched by itself (GetReplies), not the whole group. ``media`` lists
         media types to queue for download ("none", "all" or "voice,audio").
+        ``progress`` gets ``{chat_id, topic_id, fetched, date}`` every
+        ``PROGRESS_SECONDS`` during a long run.
         """
 
         if since is not None:
@@ -348,7 +353,7 @@ class TelegramArchiveClient:
         results: list[dict[str, Any]] = []
         async with client:
             for chat_id, topic_id in targets:
-                result = await self._sync_target(client, chat_id, topic_id, since, deadline, max_messages, media)
+                result = await self._sync_target(client, chat_id, topic_id, since, deadline, max_messages, media, progress)
                 results.append(result)
                 if result["retry_after"]:
                     break
@@ -363,9 +368,11 @@ class TelegramArchiveClient:
         deadline: float,
         max_messages: int,
         media: str,
+        progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         _, FloodWaitError = _load_telethon()
         fetched = 0
+        report_at = time.monotonic() + PROGRESS_SECONDS
         complete = True
         retry_after: str | None = None
         reply_to = topic_id if topic_id not in (None, GENERAL_TOPIC) else None
@@ -393,7 +400,11 @@ class TelegramArchiveClient:
                     fetched += 1
                     if len(batch) >= WRITE_BATCH:
                         self._store_batch(batch, media, "off")
-                    if fetched >= max_messages or time.monotonic() > deadline:
+                    now = time.monotonic()
+                    if progress is not None and now >= report_at:
+                        report_at = now + PROGRESS_SECONDS
+                        progress({"chat_id": chat_id, "topic_id": topic_id, "fetched": fetched, "date": record.date})
+                    if fetched >= max_messages or now > deadline:
                         complete = False
                         break
                 self._store_batch(batch, media, "off")

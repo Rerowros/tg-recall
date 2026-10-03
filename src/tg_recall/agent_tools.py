@@ -77,8 +77,10 @@ class AgentTools:
         client: str = "unknown",
         owner: bool = False,
         now: Callable[[], datetime] | None = None,
+        progress: Callable[[str], None] | None = None,
     ):
         self.config = config
+        self.progress = progress
         self.db = db
         self.client = client
         self.owner = owner
@@ -124,9 +126,18 @@ class AgentTools:
         media = str(args.get("media") or "none") if self.owner else "none"
         from .telegram_client import TelegramArchiveClient
 
-        results = asyncio.run(TelegramArchiveClient(self.config, self.db).sync_many(targets, since=since_dt, max_seconds=seconds, media=media))
         titles = chat_titles(self.db, decision.chat_ids)
         topic_names = topic_titles(self.db, decision.chat_ids)
+
+        def report(state: dict[str, Any]) -> None:
+            if self.progress is not None:
+                name = titles.get(state["chat_id"]) or str(state["chat_id"])
+                if state["topic_id"] is not None:
+                    name += f" /{state['topic_id']}"
+                self.progress(f"sync {name}: {state['fetched']} msgs so far, at {_day(state['date'].isoformat())}")
+
+        client = TelegramArchiveClient(self.config, self.db)
+        results = asyncio.run(client.sync_many(targets, since=since_dt, max_seconds=seconds, media=media, progress=report))
         lines: list[str] = []
         for result in results:
             chat_id, topic_id = result["chat_id"], result["topic_id"]

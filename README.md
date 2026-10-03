@@ -45,7 +45,7 @@ tg-recall search "deadline"
 
 - A chat that was never synced starts 30 days back. `--since` (an ISO date or `30d`) also fetches older history; later runs fetch only new messages.
 - A forum topic is fetched on its own, not the whole group.
-- `--max-seconds` (default `3600`) limits one run; an interrupted run is safe, just run it again. A Telegram rate limit (FloodWait) is saved and respected on the next run.
+- A long run prints progress to stderr every 10 seconds. `--max-seconds` (default `3600`) limits one run; an interrupted run is safe, just run it again. A Telegram rate limit (FloodWait) is saved and respected on the next run.
 - A lock file keeps a second process off the same Telegram session; it fails with `busy`.
 - Without targets, `sync` updates the chats in `ai_access.allowed_chat_ids`, or every chat that already has messages.
 - `--media voice,audio` (or `all`) also queues media; fetch it with `media download` and transcribe it with `transcribe run`.
@@ -156,7 +156,7 @@ What agents cannot do: change configuration or credentials, log in, refresh the 
 | `sync [TARGET...] [--since] [--max-seconds] [--media]` | Download new messages, and older history with `--since` |
 | `search QUERY [--chat T]... [--since] [--until] [--from] [--media] [--context] [--limit] [--budget]` | Find messages with context and citations |
 | `read [REF...] [--chat T]... [--since] [--until] [--before] [--after] [--full] [--limit]` | New messages, a period, or windows around citations |
-| `export --chat ID` | Write one chat to JSONL in the profile's `exports` directory |
+| `export --chat ID[/TOPIC]` | Write one chat or forum topic to JSONL in the profile's `exports` directory (`--since`, `--until`; everything by default) |
 | `media usage`, `media download`, `media materialize --citation REF` | Media disk usage, download queued media, fetch the media of one message |
 | `transcribe run` | Transcribe voice, audio and video (see [local transcription](docs/local-transcription.md)) |
 | `jobs` | Inspect, retry or repair the media and transcription queue |

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -118,14 +120,15 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("--limit", type=int)
     read.set_defaults(handler=cmd_read)
 
-    export = sub.add_parser("export", help="Write one chat to JSONL")
-    export.add_argument("--chat", type=int, required=True, dest="chat_id")
+    export = sub.add_parser("export", help="Write one chat or forum topic to JSONL")
+    export.add_argument("--chat", type=_export_ref, required=True, dest="chat_ref", help="chat id, <chat>/<topic> or t.me/c/<id>/<topic>")
+    export.add_argument("--topic", type=int, help="forum topic id")
     export.add_argument("--since")
     export.add_argument("--until")
     export.add_argument("--include", default="transcripts,media-metadata")
     export.add_argument("--format", choices=["jsonl"], default="jsonl")
     export.add_argument("--output")
-    export.add_argument("--limit", type=int, default=100000)
+    export.add_argument("--limit", type=int, help="max messages (default: all)")
     export.set_defaults(handler=cmd_export)
 
     media = sub.add_parser("media", help="Media files")
@@ -248,6 +251,7 @@ def _agent_operation_and_scope(args: argparse.Namespace) -> tuple[AgentOperation
     if command == "doctor":
         return AgentOperation.METADATA_LIST, RequestedAgentScope()
     if command == "export":
+        _export_target(args)
         return (
             AgentOperation.ARCHIVE_EXPORT,
             RequestedAgentScope(chat_ids=(args.chat_id,), since=args.since, until=args.until, result_limit=args.limit),
@@ -268,7 +272,8 @@ def _citation_chat(citation: str) -> tuple[int, ...]:
 
 def _tools(args: argparse.Namespace) -> AgentTools:
     cfg, db = services(args)
-    return AgentTools(cfg, db, client="cli", owner=not is_automation_shell())
+    # Progress goes to stderr so a long sync is visibly alive and stdout stays parseable.
+    return AgentTools(cfg, db, client="cli", owner=not is_automation_shell(), progress=lambda line: print(line, file=sys.stderr, flush=True))
 
 
 def _emit_tool(args: argparse.Namespace, result: ToolResult) -> int:
@@ -412,9 +417,32 @@ def cmd_telegram_check(args: argparse.Namespace) -> int:
     return emit(args, run_async(TelegramArchiveClient(cfg, db).check()))
 
 
+_TME_PRIVATE = re.compile(r"^(?:https?://)?t\.me/c/(\d+)(?:/(\d+))?(?:/\d+)?/?$")
+
+
+def _export_ref(value: str) -> tuple[int, int | None]:
+    """Parse ``-100…``, ``-100…/157`` or ``t.me/c/<id>/157`` without the archive."""
+
+    text = value.strip()
+    match = _TME_PRIVATE.match(text)
+    if match:
+        return int(f"-100{match.group(1)}"), int(match.group(2)) if match.group(2) else None
+    chat, _, topic = text.partition("/")
+    try:
+        return int(chat), int(topic) if topic else None
+    except ValueError:
+        raise argparse.ArgumentTypeError("use a chat id, <chat>/<topic> or t.me/c/<id>/<topic> (ids: tg-recall chats)") from None
+
+
+def _export_target(args: argparse.Namespace) -> None:
+    args.chat_id, topic = args.chat_ref
+    args.topic_id = args.topic if args.topic is not None else topic
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     cfg, db = services(args)
-    filters = _filters_from_args(args, args._agent_policy)
+    _export_target(args)
+    filters = replace(_filters_from_args(args, args._agent_policy), topic_id=args.topic_id)
     limit = args._agent_policy.result_limit or args.limit if is_automation_shell() else args.limit
     items = db.export_messages(filters, limit=limit)
     includes = {part.strip() for part in args.include.split(",") if part.strip()}
@@ -428,7 +456,7 @@ def cmd_export(args: argparse.Namespace) -> int:
                 ]
             if "transcripts" in includes:
                 item["transcripts"] = _transcripts_for_message(db, media)
-    target = Path(args.output) if args.output else Path(cfg.exports_dir) / f"chat-{args.chat_id}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+    target = Path(args.output) if args.output else Path(cfg.exports_dir) / f"chat-{args.chat_id}{'-topic-' + str(args.topic_id) if args.topic_id is not None else ''}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
     target = target.expanduser().resolve()
     if is_automation_shell():
         exports_root = Path(cfg.exports_dir).resolve()
@@ -443,7 +471,12 @@ def cmd_export(args: argparse.Namespace) -> int:
         for item in items:
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
     harden_path(target, is_dir=False)
-    return emit(args, {"path": str(target), "messages": len(items), "format": args.format})
+    result = {"path": str(target), "messages": len(items), "format": args.format}
+    if args.topic_id is not None:
+        result["topic_id"] = args.topic_id
+    if limit is not None and len(items) >= limit:
+        result["truncated"] = f"stopped at --limit {limit}; raise it or narrow --since/--until"
+    return emit(args, result)
 
 
 def cmd_jobs(args: argparse.Namespace) -> int:

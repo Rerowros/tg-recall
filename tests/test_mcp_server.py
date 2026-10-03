@@ -250,7 +250,7 @@ def test_sync_tool_is_opt_in_and_scoped(tmp_path, monkeypatch) -> None:
     assert "sync" in [tool["name"] for tool in server.tools()]
     seen = []
 
-    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none"):
+    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", progress=None):
         seen.append((targets, since is not None))
         return [{"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 40, "complete": True, "retry_after": None,
                  "stored": 42, "oldest_date": (NOW - timedelta(days=30)).isoformat(), "newest_date": NOW.isoformat()}
@@ -278,7 +278,7 @@ def test_search_auto_refreshes_stale_chats_and_survives_a_busy_session(tmp_path,
     server = server_with_data(tmp_path, [10, 12], allow_sync=True)
     refreshed = []
 
-    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none"):
+    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", progress=None):
         refreshed.append(sorted(targets))
         for chat_id, _ in targets:
             self.db.update_sync_state(chat_id, retry_after=None)
