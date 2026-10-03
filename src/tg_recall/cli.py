@@ -52,7 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         return args.handler(args)
     except AgentPolicyError as exc:
         if getattr(args, "json", False):
-            print(json.dumps({"ok": False, "error": {"code": exc.error_code, "message": str(exc), "details": exc.details}}))
+            print(
+                json.dumps(
+                    {"ok": False, "error": {"code": exc.error_code, "message": str(exc), "details": exc.details}}
+                )
+            )
         else:
             print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -77,7 +81,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     sub.add_parser("setup", help="Create local profile config and database").set_defaults(handler=cmd_setup)
-    sub.add_parser("doctor", help="Check archive, schema, Telegram session and transcription").set_defaults(handler=cmd_doctor)
+    sub.add_parser("doctor", help="Check archive, schema, Telegram session and transcription").set_defaults(
+        handler=cmd_doctor
+    )
 
     config = sub.add_parser("config", help="Show or change configuration")
     config_sub = config.add_subparsers(dest="config_command", required=True)
@@ -101,7 +107,9 @@ def build_parser() -> argparse.ArgumentParser:
     chats.set_defaults(handler=cmd_chats)
 
     sync = sub.add_parser("sync", help="Download new messages; with --since also older history")
-    sync.add_argument("chats", nargs="*", metavar="TARGET", help=f"{target_help}; default: allowlist or every archived chat")
+    sync.add_argument(
+        "chats", nargs="*", metavar="TARGET", help=f"{target_help}; default: allowlist or every archived chat"
+    )
     sync.add_argument("--since", help="Also fetch history back to this date (ISO, 30d, ...); new chats default to 30d")
     sync.add_argument("--max-seconds", type=float, default=3600.0)
     sync.add_argument("--media", default="none", help="Queue media for download: none, all or e.g. voice,audio")
@@ -135,12 +143,23 @@ def build_parser() -> argparse.ArgumentParser:
     usage.set_defaults(handler=cmd_usage)
 
     export = sub.add_parser("export", help="Write one chat or forum topic to JSONL")
-    export.add_argument("--chat", type=_export_ref, required=True, dest="chat_ref", help="chat id, <chat>/<topic> or t.me/c/<id>/<topic>")
+    export.add_argument(
+        "--chat",
+        type=_export_ref,
+        required=True,
+        dest="chat_ref",
+        help="chat id, <chat>/<topic> or t.me/c/<id>/<topic>",
+    )
     export.add_argument("--topic", type=int, help="forum topic id")
     export.add_argument("--since")
     export.add_argument("--until")
     export.add_argument("--include", default="transcripts,media-metadata")
-    export.add_argument("--format", choices=["jsonl", "text"], default="jsonl", help="text: the read format, one line per message, for AI agents")
+    export.add_argument(
+        "--format",
+        choices=["jsonl", "text"],
+        default="jsonl",
+        help="text: the read format, one line per message, for AI agents",
+    )
     export.add_argument("--output")
     export.add_argument("--limit", type=int, help="max messages (default: all)")
     export.set_defaults(handler=cmd_export)
@@ -287,7 +306,13 @@ def _citation_chat(citation: str) -> tuple[int, ...]:
 def _tools(args: argparse.Namespace) -> AgentTools:
     cfg, db = services(args)
     # Progress goes to stderr so a long sync is visibly alive and stdout stays parseable.
-    return AgentTools(cfg, db, client="cli", owner=not is_automation_shell(), progress=lambda line: print(line, file=sys.stderr, flush=True))
+    return AgentTools(
+        cfg,
+        db,
+        client="cli",
+        owner=not is_automation_shell(),
+        progress=lambda line: print(line, file=sys.stderr, flush=True),
+    )
 
 
 def _emit_tool(args: argparse.Namespace, result: ToolResult) -> int:
@@ -352,12 +377,16 @@ def cmd_usage(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
-    return _run_tool(args, "search", _tool_args(args, "query", "chats", "since", "until", "media", "context", "limit", "budget"))
+    return _run_tool(
+        args, "search", _tool_args(args, "query", "chats", "since", "until", "media", "context", "limit", "budget")
+    )
 
 
 def cmd_read(args: argparse.Namespace) -> int:
     return _run_tool(
-        args, "read", _tool_args(args, "refs", "chats", "since", "until", "media", "before", "after", "full", "limit", "budget")
+        args,
+        "read",
+        _tool_args(args, "refs", "chats", "since", "until", "media", "before", "after", "full", "limit", "budget"),
     )
 
 
@@ -466,7 +495,9 @@ def _export_ref(value: str) -> tuple[int, int | None]:
     try:
         return int(chat), int(topic) if topic else None
     except ValueError:
-        raise argparse.ArgumentTypeError("use a chat id, <chat>/<topic> or t.me/c/<id>/<topic> (ids: tg-recall chats)") from None
+        raise argparse.ArgumentTypeError(
+            "use a chat id, <chat>/<topic> or t.me/c/<id>/<topic> (ids: tg-recall chats)"
+        ) from None
 
 
 def _export_target(args: argparse.Namespace) -> None:
@@ -478,7 +509,9 @@ def cmd_export(args: argparse.Namespace) -> int:
     _export_target(args)
     if args.format == "text":
         target = f"{args.chat_id}/{args.topic_id}" if args.topic_id is not None else str(args.chat_id)
-        return _run_tool(args, "export", {**_tool_args(args, "since", "until"), "chats": [target], "output": args.output})
+        return _run_tool(
+            args, "export", {**_tool_args(args, "since", "until"), "chats": [target], "output": args.output}
+        )
     cfg, db = services(args)
     filters = replace(_filters_from_args(args, args._agent_policy), topic_id=args.topic_id)
     limit = args._agent_policy.result_limit or args.limit if is_automation_shell() else args.limit
@@ -494,7 +527,12 @@ def cmd_export(args: argparse.Namespace) -> int:
                 ]
             if "transcripts" in includes:
                 item["transcripts"] = _transcripts_for_message(db, media)
-    target = Path(args.output) if args.output else Path(cfg.exports_dir) / f"chat-{args.chat_id}{'-topic-' + str(args.topic_id) if args.topic_id is not None else ''}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+    target = (
+        Path(args.output)
+        if args.output
+        else Path(cfg.exports_dir)
+        / f"chat-{args.chat_id}{'-topic-' + str(args.topic_id) if args.topic_id is not None else ''}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+    )
     target = target.expanduser().resolve()
     if is_automation_shell():
         exports_root = Path(cfg.exports_dir).resolve()
@@ -502,7 +540,11 @@ def cmd_export(args: argparse.Namespace) -> int:
             target.relative_to(exports_root)
         except ValueError as exc:
             raise AgentPolicyError(
-                _policy_denial(args._agent_policy, "private_export_path_required", "automation exports must remain inside the profile exports directory")
+                _policy_denial(
+                    args._agent_policy,
+                    "private_export_path_required",
+                    "automation exports must remain inside the profile exports directory",
+                )
             ) from exc
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as handle:
@@ -528,7 +570,17 @@ def cmd_jobs(args: argparse.Namespace) -> int:
             require_human_confirmation("jobs repair --apply", args.confirm_risk, require_phrase_interactive=True)
         return emit(args, db.repair_jobs(apply=args.apply, stale_after_hours=args.stale_after_hours))
     retryable = None if args.retryable is None else args.retryable == "true"
-    return emit(args, db.list_jobs(stage=args.stage, status=args.status, retryable=retryable, chat_id=args.chat_id, older_than=args.older_than, limit=args.limit))
+    return emit(
+        args,
+        db.list_jobs(
+            stage=args.stage,
+            status=args.status,
+            retryable=retryable,
+            chat_id=args.chat_id,
+            older_than=args.older_than,
+            limit=args.limit,
+        ),
+    )
 
 
 def cmd_media_usage(args: argparse.Namespace) -> int:
@@ -541,7 +593,9 @@ def cmd_media_download(args: argparse.Namespace) -> int:
     require_human_confirmation("media download", args.confirm_risk)
     cfg, db = services(args)
     if args.copy_from:
-        downloader = MediaDownloader(db, MediaStore(cfg.media_dir, Path(cfg.cache_dir) / "downloads"), copy_file_download(args.copy_from))
+        downloader = MediaDownloader(
+            db, MediaStore(cfg.media_dir, Path(cfg.cache_dir) / "downloads"), copy_file_download(args.copy_from)
+        )
         result = downloader.run_pending(limit=args.limit)
     else:
         result = run_async(TelegramArchiveClient(cfg, db).download_pending_media(limit=args.limit))
@@ -553,14 +607,22 @@ def cmd_media_materialize(args: argparse.Namespace) -> int:
     chat_id, message_id = _parse_citation(args.citation)
     media = db.media_for_message(chat_id, message_id)
     if not media:
-        raise ValueError("no archived media for citation; run `tg-recall sync <chat> --media all` (or voice,audio) first")
-    if is_automation_shell() and not _media_policy_allows(args._agent_policy.media_policy, [value.media_type for value in media]):
-        raise AgentPolicyError(_policy_denial(args._agent_policy, "media_not_allowed", "cited media is outside AI/automation media policy"))
+        raise ValueError(
+            "no archived media for citation; run `tg-recall sync <chat> --media all` (or voice,audio) first"
+        )
+    if is_automation_shell() and not _media_policy_allows(
+        args._agent_policy.media_policy, [value.media_type for value in media]
+    ):
+        raise AgentPolicyError(
+            _policy_denial(args._agent_policy, "media_not_allowed", "cited media is outside AI/automation media policy")
+        )
     if any(value.status != "downloaded" for value in media):
         requested_ids = {value.id for value in media if value.status != "downloaded"}
         for media_id in requested_ids:
             db.requeue_media_download(media_id)
-        run_async(TelegramArchiveClient(cfg, db).download_pending_media(limit=len(requested_ids), media_ids=requested_ids))
+        run_async(
+            TelegramArchiveClient(cfg, db).download_pending_media(limit=len(requested_ids), media_ids=requested_ids)
+        )
         media = db.media_for_message(chat_id, message_id)
     store = MediaStore(cfg.media_dir, Path(cfg.cache_dir) / "downloads")
     return emit(
@@ -568,7 +630,11 @@ def cmd_media_materialize(args: argparse.Namespace) -> int:
         {
             "citation": args.citation,
             "media": [
-                {"type": value.media_type, "status": value.status, "path": str(store.path_for_media(value)) if store.path_for_media(value) else None}
+                {
+                    "type": value.media_type,
+                    "status": value.status,
+                    "path": str(store.path_for_media(value)) if store.path_for_media(value) else None,
+                }
                 for value in media
             ],
         },
@@ -584,8 +650,14 @@ def cmd_transcribe_run(args: argparse.Namespace) -> int:
         media = db.media_for_message(chat_id, message_id)
         if not media:
             raise ValueError("no archived media for citation")
-        if is_automation_shell() and not _media_policy_allows(args._agent_policy.media_policy, [value.media_type for value in media]):
-            raise AgentPolicyError(_policy_denial(args._agent_policy, "media_not_allowed", "cited media is outside AI/automation media policy"))
+        if is_automation_shell() and not _media_policy_allows(
+            args._agent_policy.media_policy, [value.media_type for value in media]
+        ):
+            raise AgentPolicyError(
+                _policy_denial(
+                    args._agent_policy, "media_not_allowed", "cited media is outside AI/automation media policy"
+                )
+            )
         media_ids = {value.id for value in media}
     result = _run_transcription_policy(args, cfg, db, TelegramArchiveClient(cfg, db), policy, args.limit, media_ids)
     return emit(args, result)
@@ -622,8 +694,13 @@ def cmd_purge(args: argparse.Namespace) -> int:
 def cmd_security_check(args: argparse.Namespace) -> int:
     cfg, _ = services(args)
     paths = [
-        (cfg.data_dir, True), (cfg.media_dir, True), (cfg.db_path, False), (cfg.telegram.session_path, False),
-        (cfg.credentials_path, False), (cfg.state_dir, True), (cfg.cache_dir, True),
+        (cfg.data_dir, True),
+        (cfg.media_dir, True),
+        (cfg.db_path, False),
+        (cfg.telegram.session_path, False),
+        (cfg.credentials_path, False),
+        (cfg.state_dir, True),
+        (cfg.cache_dir, True),
     ]
     findings = []
     for raw_path, is_dir in paths:
@@ -659,12 +736,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     }
     if cfg.telegram.api_id and cfg.telegram.api_hash and status["session_present"]:
         try:
-            status["telegram"] = {"authorized": bool(run_async(TelegramArchiveClient(cfg, db).check()).get("authorized"))}
+            status["telegram"] = {
+                "authorized": bool(run_async(TelegramArchiveClient(cfg, db).check()).get("authorized"))
+            }
         except Exception as exc:
             status["telegram"] = {"authorized": False, "error": type(exc).__name__}
     else:
         status["telegram"] = {"authorized": False, "reason": "credentials or session missing"}
-    status["backup_guidance"] = "Create an essential backup before schema or queue repair: tg-recall backup create --mode essential --output PATH"
+    status["backup_guidance"] = (
+        "Create an essential backup before schema or queue repair: tg-recall backup create --mode essential --output PATH"
+    )
     return emit(args, status)
 
 
@@ -800,6 +881,8 @@ def _transcripts_for_message(db: Database, media: list[Any]) -> list[dict[str, A
     values: list[dict[str, Any]] = []
     with db.connect() as conn:
         for item in media:
-            rows = conn.execute("SELECT provider, text, language, created_at FROM transcripts WHERE media_id = ?", (item.id,)).fetchall()
+            rows = conn.execute(
+                "SELECT provider, text, language, created_at FROM transcripts WHERE media_id = ?", (item.id,)
+            ).fetchall()
             values.extend(dict(row) for row in rows)
     return values

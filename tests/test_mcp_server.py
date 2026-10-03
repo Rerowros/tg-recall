@@ -28,14 +28,18 @@ def server_with_data(tmp_path, allowed: list[int], **policy) -> ReadOnlyMCPServe
     ]
     for chat_id, message_id, date, text, sender_id, sender in rows:
         db.upsert_message(
-            MessageRecord(chat_id=chat_id, message_id=message_id, date=date, text=text, sender_id=sender_id, sender_name=sender)
+            MessageRecord(
+                chat_id=chat_id, message_id=message_id, date=date, text=text, sender_id=sender_id, sender_name=sender
+            )
         )
     db.set_meta("self_user_id", "7")
     return ReadOnlyMCPServer(cfg, db)
 
 
 def call(server: ReadOnlyMCPServer, name: str, arguments: dict) -> dict:
-    return server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}})
+    return server.handle(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
+    )
 
 
 def text_of(response: dict) -> str:
@@ -61,7 +65,9 @@ def test_mcp_initialize_is_short_harness_neutral_and_records_client(tmp_path) ->
 
 def test_mcp_tools_list_is_small_read_only_surface(tmp_path) -> None:
     server = server_with_data(tmp_path, [10])
-    names = [tool["name"] for tool in server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]]
+    names = [
+        tool["name"] for tool in server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})["result"]["tools"]
+    ]
 
     assert names == ["search", "read", "stats", "export", "chats"]
     with_sync = [tool["name"] for tool in server_with_data(tmp_path / "s", [10], allow_sync=True).tools()]
@@ -198,9 +204,16 @@ def test_forum_topic_root_reply_marker_is_hidden(tmp_path) -> None:
     from tg_recall.agent_render import RenderContext, render_messages
 
     when = NOW.isoformat()
-    rows = [AgentMessage(chat_id=10, message_id=i, date=when, text=f"m{i}", sender_name="A", reply_to=183) for i in (200, 201, 202)]
-    rows.append(AgentMessage(chat_id=10, message_id=203, date=when, text="answer", sender_name="B", reply_to=201, hit=True))
-    rows.append(AgentMessage(chat_id=10, message_id=204, date=when, text="lone", sender_name="B", reply_to=90, hit=True))
+    rows = [
+        AgentMessage(chat_id=10, message_id=i, date=when, text=f"m{i}", sender_name="A", reply_to=183)
+        for i in (200, 201, 202)
+    ]
+    rows.append(
+        AgentMessage(chat_id=10, message_id=203, date=when, text="answer", sender_name="B", reply_to=201, hit=True)
+    )
+    rows.append(
+        AgentMessage(chat_id=10, message_id=204, date=when, text="lone", sender_name="B", reply_to=90, hit=True)
+    )
     text = render_messages([(10, rows)], RenderContext(titles={10: "Work"}))
 
     assert "↩183" not in text
@@ -221,8 +234,14 @@ def forum_server(tmp_path, **policy) -> ReadOnlyMCPServer:
     for offset, (message_id, topic, reply, text) in enumerate(rows):
         db.upsert_message(
             MessageRecord(
-                chat_id=-100, message_id=message_id, date=NOW - timedelta(minutes=30 - offset), text=text,
-                sender_id=50, sender_name="Влад", reply_to_message_id=reply, topic_id=topic,
+                chat_id=-100,
+                message_id=message_id,
+                date=NOW - timedelta(minutes=30 - offset),
+                text=text,
+                sender_id=50,
+                sender_name="Влад",
+                reply_to_message_id=reply,
+                topic_id=topic,
             )
         )
     return server
@@ -232,7 +251,9 @@ def test_forum_topic_by_link_or_title_reads_only_that_topic(tmp_path) -> None:
     server = forum_server(tmp_path)
     server.config.ai_access.allowed_chat_ids.append(-200)
     server.db.upsert_chat(ChatRecord(chat_id=-200, title="PasarGuard news", chat_type="channel"))
-    server.db.upsert_message(MessageRecord(chat_id=-200, message_id=1, date=NOW - timedelta(minutes=5), text="привет из канала"))
+    server.db.upsert_message(
+        MessageRecord(chat_id=-200, message_id=1, date=NOW - timedelta(minutes=5), text="привет из канала")
+    )
     assert "привет из канала" not in text_of(call(server, "read", {"chats": "PasarGuard/Русский", "since": "7d"}))
 
     by_link = text_of(call(server, "read", {"chats": "https://t.me/PasarGuardGP/157", "since": "7d"}))
@@ -254,11 +275,24 @@ def test_sync_tool_is_opt_in_and_scoped(tmp_path, monkeypatch) -> None:
     assert "sync" in [tool["name"] for tool in server.tools()]
     seen = []
 
-    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", **kwargs):
+    async def fake_sync_many(
+        self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", **kwargs
+    ):
         seen.append((targets, since is not None))
-        return [{"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 40, "complete": True, "retry_after": None,
-                 "stored": 42, "oldest_date": (NOW - timedelta(days=30)).isoformat(), "newest_date": NOW.isoformat()}
-                for chat_id, topic_id in targets]
+        return [
+            {
+                "chat_id": chat_id,
+                "topic_id": topic_id,
+                "forum": True,
+                "fetched": 40,
+                "complete": True,
+                "retry_after": None,
+                "stored": 42,
+                "oldest_date": (NOW - timedelta(days=30)).isoformat(),
+                "newest_date": NOW.isoformat(),
+            }
+            for chat_id, topic_id in targets
+        ]
 
     monkeypatch.setattr(TelegramArchiveClient, "sync_many", fake_sync_many)
     text = text_of(call(server, "sync", {"chats": "https://t.me/PasarGuardGP/157", "since": "2026-01-01"}))
@@ -282,7 +316,9 @@ def test_search_auto_refreshes_stale_chats_and_survives_a_busy_session(tmp_path,
     server = server_with_data(tmp_path, [10, 12], allow_sync=True)
     refreshed = []
 
-    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", **kwargs):
+    async def fake_sync_many(
+        self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none", **kwargs
+    ):
         refreshed.append(sorted(targets))
         for chat_id, _ in targets:
             self.db.update_sync_state(chat_id, retry_after=None)
@@ -305,7 +341,6 @@ def test_search_auto_refreshes_stale_chats_and_survives_a_busy_session(tmp_path,
         conn.execute("UPDATE sync_state SET last_synced_at = '2000-01-01T00:00:00+00:00'")
     stale = text_of(call(server, "search", {"query": "deadline"}))
     assert "deadline" in stale and "refresh skipped: busy" in stale
-
 
 
 def test_search_takes_alternatives_phrases_and_exclusions(tmp_path) -> None:
@@ -359,12 +394,26 @@ def test_long_sync_returns_early_and_reports_progress_then_results(tmp_path, mon
         progress({"chat_id": -100, "topic_id": 157, "fetched": 0, "date": None, "total": 19000})
         progress({"chat_id": -100, "topic_id": 157, "fetched": 5000, "date": NOW - timedelta(days=60), "total": 19000})
         release.wait(5)
-        return [{"chat_id": -100, "topic_id": 157, "forum": True, "fetched": 19000, "complete": True, "retry_after": None,
-                 "stored": 19002, "oldest_date": (NOW - timedelta(days=270)).isoformat(), "newest_date": NOW.isoformat()}]
+        return [
+            {
+                "chat_id": -100,
+                "topic_id": 157,
+                "forum": True,
+                "fetched": 19000,
+                "complete": True,
+                "retry_after": None,
+                "stored": 19002,
+                "oldest_date": (NOW - timedelta(days=270)).isoformat(),
+                "newest_date": NOW.isoformat(),
+            }
+        ]
 
     monkeypatch.setattr(TelegramArchiveClient, "sync_many", slow_sync_many)
     started = text_of(call(server, "sync", {"chats": "PasarGuard/157", "since": "2026-01-01"}))
-    assert started.startswith("sync running in background") and "PasarGuard /157: 5000 msgs of ~19000 on Telegram" in started
+    assert (
+        started.startswith("sync running in background")
+        and "PasarGuard /157: 5000 msgs of ~19000 on Telegram" in started
+    )
 
     during = text_of(call(server, "read", {"chats": "PasarGuard/157", "since": "7d"}))
     assert "sync running in background: PasarGuard /157" in during  # reads work meanwhile
@@ -381,7 +430,11 @@ def test_transcribe_is_opt_in_and_returns_the_text(tmp_path, monkeypatch) -> Non
     from tg_recall.telegram_client import TelegramArchiveClient
 
     server = forum_server(tmp_path)
-    server.db.upsert_message(MessageRecord(chat_id=10, message_id=9, date=NOW - timedelta(hours=1), text="", has_media=True, media_type="voice"))
+    server.db.upsert_message(
+        MessageRecord(
+            chat_id=10, message_id=9, date=NOW - timedelta(hours=1), text="", has_media=True, media_type="voice"
+        )
+    )
     assert "transcribe" not in [tool["name"] for tool in server.tools()]
 
     server.config.ai_access.allow_transcribe = True

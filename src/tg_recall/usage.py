@@ -22,14 +22,19 @@ REPEAT_SECONDS = 120
 def usage_report(db: Database, *, since: str | None = None, client: str | None = None) -> str:
     rows = _calls(db, since, client)
     if not rows:
-        return "0 agent calls recorded" + (f" since {since}" if since else "") + " (MCP and agent-shell CLI calls are logged from v0.8)"
+        return (
+            "0 agent calls recorded"
+            + (f" since {since}" if since else "")
+            + " (MCP and agent-shell CLI calls are logged from v0.8)"
+        )
     by_tool: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         by_tool[row["tool"]].append(row)
     first, last = rows[0]["at"][:16].replace("T", " "), rows[-1]["at"][:16].replace("T", " ")
     clients = Counter(row["client"] for row in rows)
     lines = [
-        f"{len(rows)} agent calls · {first} → {last} UTC · clients: " + ", ".join(f"{name} {count}" for name, count in clients.most_common(5)),
+        f"{len(rows)} agent calls · {first} → {last} UTC · clients: "
+        + ", ".join(f"{name} {count}" for name, count in clients.most_common(5)),
         "tool · calls · errors · empty · avg tok · max tok · avg ms",
     ]
     for tool, calls in sorted(by_tool.items(), key=lambda item: -len(item[1])):
@@ -46,10 +51,16 @@ def usage_report(db: Database, *, since: str | None = None, client: str | None =
     misses = [call for call in rows if call["tool"] == "search" and not call["error"] and not call["count"]]
     if misses:
         queries = Counter(str(call["args"].get("query", "")) for call in misses)
-        lines.append("empty searches: " + " · ".join(f"{query!r}" + (f" ×{count}" if count > 1 else "") for query, count in queries.most_common(10)))
+        lines.append(
+            "empty searches: "
+            + " · ".join(f"{query!r}" + (f" ×{count}" if count > 1 else "") for query, count in queries.most_common(10))
+        )
     identical, rephrased = _repeats(rows)
     if identical:
-        lines.append(f"identical calls within {REPEAT_SECONDS}s: " + " · ".join(f"{tool} {count}" for tool, count in identical.most_common()))
+        lines.append(
+            f"identical calls within {REPEAT_SECONDS}s: "
+            + " · ".join(f"{tool} {count}" for tool, count in identical.most_common())
+        )
     if rephrased:
         lines.append(f"searches retried after an empty result: {rephrased}")
     pages = sum(1 for call in rows if call["tool"] == "read" and call["args"].get("since") and call["count"] >= 100)
@@ -65,7 +76,9 @@ def _calls(db: Database, since: str | None, client: str | None) -> list[dict[str
         where += " AND created_at >= ?"
         params.append(since)
     with db.connect() as conn:
-        raw = conn.execute(f"SELECT scope, details_json, created_at FROM audit_events WHERE {where} ORDER BY id", params).fetchall()
+        raw = conn.execute(
+            f"SELECT scope, details_json, created_at FROM audit_events WHERE {where} ORDER BY id", params
+        ).fetchall()
     calls = []
     for row in raw:
         details = json.loads(row["details_json"] or "{}")

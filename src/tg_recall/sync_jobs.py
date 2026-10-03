@@ -91,7 +91,15 @@ class SyncJobs:
         job = self.job
         return job if job is not None and job.running else None
 
-    def start(self, config: AppConfig, db: Database, targets: list[tuple[int, int | None]], *, since: datetime | None, seconds: float) -> SyncJob:
+    def start(
+        self,
+        config: AppConfig,
+        db: Database,
+        targets: list[tuple[int, int | None]],
+        *,
+        since: datetime | None,
+        seconds: float,
+    ) -> SyncJob:
         with self._lock:
             if self.job is not None and self.job.running:
                 return self.job
@@ -108,7 +116,13 @@ class SyncJobs:
         try:
             client = TelegramArchiveClient(config, db)
             job.results = asyncio.run(
-                client.sync_many(job.targets, since=job.since, max_seconds=seconds, progress=job.update, progress_seconds=PROGRESS_SECONDS)
+                client.sync_many(
+                    job.targets,
+                    since=job.since,
+                    max_seconds=seconds,
+                    progress=job.update,
+                    progress_seconds=PROGRESS_SECONDS,
+                )
             )
         except Exception as exc:
             job.error = str(exc).split(";")[0][:200]
@@ -120,4 +134,3 @@ class SyncJobs:
 def _aware(value: Any) -> datetime:
     moment = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
     return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
-

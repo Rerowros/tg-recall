@@ -37,14 +37,18 @@ class TelegramNotAuthorizedError(RuntimeError):
     """The saved Telegram session is missing or revoked; nothing will prompt for a login."""
 
     def __init__(self) -> None:
-        super().__init__("Telegram session is not authorized. Run `tg-recall telegram auth` in an interactive terminal.")
+        super().__init__(
+            "Telegram session is not authorized. Run `tg-recall telegram auth` in an interactive terminal."
+        )
 
 
 class TelegramBusyError(RuntimeError):
     """Another tg-recall process holds the Telegram session (usually a running sync)."""
 
     def __init__(self) -> None:
-        super().__init__("busy: another tg-recall process is using the Telegram session (a sync is running); try again later")
+        super().__init__(
+            "busy: another tg-recall process is using the Telegram session (a sync is running); try again later"
+        )
 
 
 class TelegramRetryPendingError(RuntimeError):
@@ -168,7 +172,9 @@ class TelegramArchiveClient:
             me = await client.get_me()
             if getattr(me, "id", None):
                 self.db.set_meta("self_user_id", str(me.id))
-            self.db.audit("telegram_authorized", user_id=getattr(me, "id", None), username=getattr(me, "username", None))
+            self.db.audit(
+                "telegram_authorized", user_id=getattr(me, "id", None), username=getattr(me, "username", None)
+            )
 
     async def check(self) -> dict[str, Any]:
         client = self._client()
@@ -202,6 +208,7 @@ class TelegramArchiveClient:
     async def download_pending_media(self, limit: int = 20, media_ids: set[int] | None = None) -> dict[str, int]:
         client = self._client()
         async with client:
+
             async def download(chat_id: int, message_id: int, destination: Any) -> Any:
                 message = await client.get_messages(chat_id, ids=message_id)
                 if not message or not getattr(message, "media", None):
@@ -252,10 +259,14 @@ class TelegramArchiveClient:
                 except Exception as exc:
                     self.db.update_job(job.id, "retry", str(exc), retryable=True)
                     failed += 1
-            self.db.audit("telegram_media_download_run", details={"completed": completed, "failed": failed, "skipped": skipped})
+            self.db.audit(
+                "telegram_media_download_run", details={"completed": completed, "failed": failed, "skipped": skipped}
+            )
             return {"completed": completed, "failed": failed, "skipped": skipped}
 
-    async def transcribe_pending_with_telegram(self, limit: int = 20, media_ids: set[int] | None = None) -> dict[str, int]:
+    async def transcribe_pending_with_telegram(
+        self, limit: int = 20, media_ids: set[int] | None = None
+    ) -> dict[str, int]:
         try:
             from telethon import functions
         except ImportError as exc:
@@ -304,7 +315,9 @@ class TelegramArchiveClient:
                 except Exception as exc:
                     self.db.update_job(job.id, "retry", str(exc), retryable=True)
                     failed += 1
-        self.db.audit("telegram_transcription_run", details={"completed": completed, "failed": failed, "skipped": skipped})
+        self.db.audit(
+            "telegram_transcription_run", details={"completed": completed, "failed": failed, "skipped": skipped}
+        )
         return {"completed": completed, "failed": failed, "skipped": skipped}
 
     async def sync_chat(
@@ -317,7 +330,9 @@ class TelegramArchiveClient:
         max_messages: int = 100_000,
         media: str = "none",
     ) -> dict[str, Any]:
-        results = await self.sync_many([(chat_id, topic_id)], since=since, max_seconds=max_seconds, max_messages=max_messages, media=media)
+        results = await self.sync_many(
+            [(chat_id, topic_id)], since=since, max_seconds=max_seconds, max_messages=max_messages, media=media
+        )
         return results[0]
 
     async def sync_many(
@@ -354,7 +369,15 @@ class TelegramArchiveClient:
         async with client:
             for chat_id, topic_id in targets:
                 result = await self._sync_target(
-                    client, chat_id, topic_id, since, deadline, max_messages, media, progress, progress_seconds or PROGRESS_SECONDS
+                    client,
+                    chat_id,
+                    topic_id,
+                    since,
+                    deadline,
+                    max_messages,
+                    media,
+                    progress,
+                    progress_seconds or PROGRESS_SECONDS,
                 )
                 results.append(result)
                 if result["retry_after"]:
@@ -397,7 +420,9 @@ class TelegramArchiveClient:
         try:
             for extra in passes:
                 reverse = bool(extra.get("reverse"))
-                async for message in client.iter_messages(chat_id, limit=None, reply_to=reply_to, wait_time=SYNC_WAIT_SECONDS, **extra):
+                async for message in client.iter_messages(
+                    chat_id, limit=None, reply_to=reply_to, wait_time=SYNC_WAIT_SECONDS, **extra
+                ):
                     if since and not reverse and ensure_aware(message.date) < since:
                         break
                     record = message_from_telethon(chat_id, message, forum=forum)
@@ -410,7 +435,15 @@ class TelegramArchiveClient:
                     now = time.monotonic()
                     if progress is not None and now >= report_at:
                         report_at = now + progress_seconds
-                        progress({"chat_id": chat_id, "topic_id": topic_id, "fetched": fetched, "date": record.date, "total": total})
+                        progress(
+                            {
+                                "chat_id": chat_id,
+                                "topic_id": topic_id,
+                                "fetched": fetched,
+                                "date": record.date,
+                                "total": total,
+                            }
+                        )
                     if fetched >= max_messages or now > deadline:
                         complete = False
                         break
@@ -422,7 +455,14 @@ class TelegramArchiveClient:
             complete = False
             retry_after = (datetime.now(UTC) + timedelta(seconds=exc.seconds)).isoformat()
         self.db.update_sync_state(chat_id, retry_after=retry_after)
-        self.db.audit("telegram_chat_synced", str(chat_id), chat_id=chat_id, topic_id=topic_id, messages=fetched, complete=complete)
+        self.db.audit(
+            "telegram_chat_synced",
+            str(chat_id),
+            chat_id=chat_id,
+            topic_id=topic_id,
+            messages=fetched,
+            complete=complete,
+        )
         after = self.db.message_bounds(chat_id, topic_id)
         return {
             "chat_id": chat_id,
@@ -450,8 +490,14 @@ class TelegramArchiveClient:
         try:
             from telethon.tl.functions.messages import GetForumTopicsRequest
 
-            result = await client(GetForumTopicsRequest(peer=entity, offset_date=None, offset_id=0, offset_topic=0, limit=100))
-            topics += [(int(topic.id), str(topic.title)) for topic in getattr(result, "topics", []) if getattr(topic, "title", None)]
+            result = await client(
+                GetForumTopicsRequest(peer=entity, offset_date=None, offset_id=0, offset_topic=0, limit=100)
+            )
+            topics += [
+                (int(topic.id), str(topic.title))
+                for topic in getattr(result, "topics", [])
+                if getattr(topic, "title", None)
+            ]
         except Exception:
             # Titles are a convenience; message topic ids still work without them.
             pass

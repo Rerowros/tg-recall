@@ -183,7 +183,9 @@ def _msg(message_id, minutes_ago, *, reply_to=None, text="hi"):
 
 
 def _in_topic(topic, reply_to=None):
-    return SimpleNamespace(forum_topic=True, reply_to_msg_id=reply_to or topic, reply_to_top_id=topic if reply_to else None)
+    return SimpleNamespace(
+        forum_topic=True, reply_to_msg_id=reply_to or topic, reply_to_top_id=topic if reply_to else None
+    )
 
 
 def test_forum_topic_membership_is_not_a_reply() -> None:
@@ -222,7 +224,9 @@ class FakeForum:
     async def __call__(self, request):
         return SimpleNamespace(topics=[SimpleNamespace(id=157, title="Русский")])
 
-    async def iter_messages(self, chat_id, limit=None, reply_to=None, wait_time=None, min_id=0, max_id=0, reverse=False):
+    async def iter_messages(
+        self, chat_id, limit=None, reply_to=None, wait_time=None, min_id=0, max_id=0, reverse=False
+    ):
         self.calls.append({"reply_to": reply_to, "min_id": min_id, "max_id": max_id, "reverse": reverse})
         rows = [m for m in self.messages if reply_to is None or (m.reply_to and m.reply_to.reply_to_msg_id == reply_to)]
         rows = [m for m in rows if m.id > min_id and (not max_id or m.id < max_id)]

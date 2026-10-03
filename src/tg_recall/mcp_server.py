@@ -39,7 +39,13 @@ _INT = {"type": "integer"}
 _STR = {"type": "string"}
 _READ_ONLY = {"readOnlyHint": True, "openWorldHint": False}
 AGENT_TOOL_NAMES = ("search", "read", "stats", "export", "chats", "sync", "transcribe")
-_SCOPE_PROPS = {"chats": {"anyOf": _CHATS_TYPES}, "since": _STR, "until": _STR, "from": _CHAT_REF, "media": _MEDIA_PARAM}
+_SCOPE_PROPS = {
+    "chats": {"anyOf": _CHATS_TYPES},
+    "since": _STR,
+    "until": _STR,
+    "from": _CHAT_REF,
+    "media": _MEDIA_PARAM,
+}
 _SYNC_TOOL = {
     "name": "sync",
     "description": (
@@ -156,7 +162,11 @@ class ReadOnlyMCPServer:
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "refs": {"type": "array", "items": _STR, "description": "tg://chat/<id>/message/<id> or <chat>/<id>; max 8."},
+                        "refs": {
+                            "type": "array",
+                            "items": _STR,
+                            "description": "tg://chat/<id>/message/<id> or <chat>/<id>; max 8.",
+                        },
                         "chats": {"anyOf": _CHATS_TYPES},
                         "since": _STR,
                         "until": _STR,
@@ -180,7 +190,11 @@ class ReadOnlyMCPServer:
                 "annotations": _READ_ONLY,
                 "inputSchema": {
                     "type": "object",
-                    "properties": {**_SCOPE_PROPS, "query": _STR, "by": {"type": "string", "enum": ["day", "week", "month"]}},
+                    "properties": {
+                        **_SCOPE_PROPS,
+                        "query": _STR,
+                        "by": {"type": "string", "enum": ["day", "week", "month"]},
+                    },
                     "additionalProperties": False,
                 },
             },
@@ -190,7 +204,12 @@ class ReadOnlyMCPServer:
                     "Write a whole period/topic (full text, read's format) to a local file and return its path, "
                     "size and token estimate. For bulk analysis: read the file with your own file tools in chunks."
                 ),
-                "annotations": {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+                "annotations": {
+                    "readOnlyHint": False,
+                    "destructiveHint": False,
+                    "idempotentHint": True,
+                    "openWorldHint": False,
+                },
                 "inputSchema": {"type": "object", "properties": dict(_SCOPE_PROPS), "additionalProperties": False},
             },
             {
@@ -274,7 +293,9 @@ def _mcp_initialize_instructions(config: AppConfig, db: Database) -> str:
         "…[+N] = cut (read refs full=true). Cite tg://chat/<chat_id>/message/<id>.",
     ]
     if not policy.enabled or not allowed:
-        lines.append("AI access is off or no chats are allowed yet; the owner enables it with `tg-recall config set ai_access...`.")
+        lines.append(
+            "AI access is off or no chats are allowed yet; the owner enables it with `tg-recall config set ai_access...`."
+        )
         return "\n".join(lines)
     try:
         synced = ago(archive_synced_at(db, allowed))
@@ -331,7 +352,23 @@ def record_call(
         return
 
 
-_LOGGED_ARGUMENTS = {"query", "chats", "chat_id", "since", "until", "from", "media", "context", "limit", "budget", "by", "full", "before", "after", "refs"}
+_LOGGED_ARGUMENTS = {
+    "query",
+    "chats",
+    "chat_id",
+    "since",
+    "until",
+    "from",
+    "media",
+    "context",
+    "limit",
+    "budget",
+    "by",
+    "full",
+    "before",
+    "after",
+    "refs",
+}
 
 
 def _tool_error(message: str) -> dict[str, Any]:
