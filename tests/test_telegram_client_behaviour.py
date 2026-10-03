@@ -383,3 +383,114 @@ def test_archive_operations_run_with_saved_session(tmp_path, monkeypatch) -> Non
 
     assert asyncio.run(client.discover_chats()) == []
     assert asyncio.run(client.check())["authorized"] is True
+
+
+def _msg(message_id, minutes_ago, *, reply_to=None, text="hi"):
+    from datetime import timedelta
+
+    return SimpleNamespace(
+        id=message_id,
+        date=datetime(2026, 10, 1, tzinfo=UTC) - timedelta(minutes=minutes_ago),
+        raw_text=text,
+        text=None,
+        sender_id=7,
+        sender=None,
+        reply_to=reply_to,
+        fwd_from=None,
+        edit_date=None,
+        voice=None,
+        audio=None,
+        video=None,
+        photo=None,
+        document=None,
+        media=None,
+    )
+
+
+def _in_topic(topic, reply_to=None):
+    return SimpleNamespace(forum_topic=True, reply_to_msg_id=reply_to or topic, reply_to_top_id=topic if reply_to else None)
+
+
+def test_forum_topic_membership_is_not_a_reply() -> None:
+    from tg_recall.telegram_client import forward_label, message_from_telethon
+
+    straight = message_from_telethon(-100, _msg(200, 5, reply_to=_in_topic(157)), forum=True)
+    answer = message_from_telethon(-100, _msg(201, 4, reply_to=_in_topic(157, reply_to=200)), forum=True)
+    general = message_from_telethon(-100, _msg(202, 3), forum=True)
+    plain = message_from_telethon(10, _msg(5, 3, reply_to=SimpleNamespace(reply_to_msg_id=4)))
+
+    assert (straight.topic_id, straight.reply_to_message_id) == (157, None)
+    assert (answer.topic_id, answer.reply_to_message_id) == (157, 200)
+    assert (general.topic_id, general.reply_to_message_id) == (1, None)
+    assert (plain.topic_id, plain.reply_to_message_id) == (None, 4)
+    assert forward_label(SimpleNamespace(from_name="News", from_id=None)) == "News"
+    assert forward_label(SimpleNamespace(from_name=None, from_id=SimpleNamespace(channel_id=42))) == "channel:42"
+
+
+class FakeForum:
+    """A forum with topic 157 (ids 300..399 every minute) and General noise."""
+
+    def __init__(self):
+        self.calls = []
+        self.messages = [_msg(i, 1000 - i, reply_to=_in_topic(157)) for i in range(300, 400)]
+        self.messages += [_msg(i, 1000 - i) for i in range(400, 450)]
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get_entity(self, chat_id):
+        return SimpleNamespace(forum=True)
+
+    async def __call__(self, request):
+        return SimpleNamespace(topics=[SimpleNamespace(id=157, title="Русский")])
+
+    async def iter_messages(self, chat_id, limit=None, reply_to=None, wait_time=None, min_id=0, max_id=0, reverse=False):
+        self.calls.append({"reply_to": reply_to, "min_id": min_id, "max_id": max_id, "reverse": reverse})
+        rows = [m for m in self.messages if reply_to is None or (m.reply_to and m.reply_to.reply_to_msg_id == reply_to)]
+        rows = [m for m in rows if m.id > min_id and (not max_id or m.id < max_id)]
+        rows.sort(key=lambda m: m.id, reverse=not reverse)
+        for message in rows:
+            yield message
+
+
+def test_sync_chat_fetches_one_topic_since_a_date_and_resumes(tmp_path, monkeypatch) -> None:
+    from datetime import timedelta
+
+    import tg_recall.telegram_client as module
+
+    db = Database(tmp_path / "archive.sqlite3")
+    db.migrate()
+    fake = FakeForum()
+    client = TelegramArchiveClient(cfg(), db)
+    monkeypatch.setattr(client, "_client", lambda: fake)
+    monkeypatch.setattr(module, "_load_telethon", lambda: (object, FakeFloodWaitError))
+    since = datetime(2026, 10, 1, tzinfo=UTC) - timedelta(minutes=1000 - 350)
+
+    first = asyncio.run(client.sync_chat(-100, topic_id=157, since=since, max_messages=20))
+    assert fake.calls[0]["reply_to"] == 157  # GetReplies for the topic, not the whole group
+    assert first["complete"] is False and first["fetched"] == 20
+    second = asyncio.run(client.sync_chat(-100, topic_id=157, since=since))
+    assert second["complete"] is True
+    assert fake.calls[-2]["reverse"] is True and fake.calls[-2]["min_id"] == 399  # newer pass above the watermark
+    assert fake.calls[-1]["max_id"] == 380  # then older, down to since
+
+    bounds = db.message_bounds(-100, 157)
+    assert bounds["count"] == 50 and bounds["oldest_id"] == 350
+    assert db.message_bounds(-100, 1) is None  # General was never fetched
+    assert db.forum_topics([-100])[-100] == {1: "General", 157: "Русский"}
+
+
+def test_session_lock_is_exclusive_and_released(tmp_path) -> None:
+    from tg_recall.telegram_client import SessionLock, TelegramBusyError
+
+    first = SessionLock(str(tmp_path / "tg.session"))
+    first.acquire()
+    with pytest.raises(TelegramBusyError, match="busy"):
+        SessionLock(str(tmp_path / "tg.session")).acquire()
+    first.release()
+    again = SessionLock(str(tmp_path / "tg.session"))
+    again.acquire()
+    again.release()

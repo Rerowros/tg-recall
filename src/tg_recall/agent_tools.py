@@ -6,6 +6,7 @@ permitted chats and returns compact text sized to a token budget.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Sequence
@@ -24,11 +25,12 @@ from .agent_query import (
     parse_ref,
     parse_when,
     period_messages,
-    resolve_chats,
     resolve_sender,
+    resolve_targets,
     save_cursor,
     search_hits,
     self_user_id,
+    topic_titles,
 )
 from .agent_render import RenderContext, ago, citations_line, render_chat_list, render_messages, token_estimate, tz_label
 from .config import AppConfig
@@ -61,6 +63,54 @@ class AgentTools:
         allowed = tuple(int(value) for value in self.config.ai_access.allowed_chat_ids)
         found = list_chats(self.db, allowed, args.get("query"))
         return ToolResult(render_chat_list(found, self._now()), len(found), tuple(item.chat_id for item in found) or decision.chat_ids)
+
+    def sync(self, args: dict[str, Any]) -> ToolResult:
+        """Download one chat or forum topic (up to 3 targets) from Telegram into the archive."""
+
+        policy = self.config.ai_access
+        if not policy.allow_sync:
+            raise AgentQueryError("sync is off; the owner enables it with `tg-recall config set ai_access.allow_sync true`")
+        spec = args.get("chats", args.get("chat_id"))
+        if spec in (None, "", []):
+            raise AgentQueryError("sync: chats is required (id, title, 'chat/topic' or t.me link)")
+        allowed = tuple(int(value) for value in policy.allowed_chat_ids)
+        chats, topics = resolve_targets(self.db, allowed, spec)
+        since = parse_when(args.get("since") or "30d", now=self._now())
+        decision = self._decide(AgentOperation.SYNC, chats, since, None, None)
+        bounds = [datetime.fromisoformat(value) for value in (since, parse_when(decision.since, now=self._now())) if value]
+        since_dt = max(bounds) if bounds else None
+        since = since_dt.isoformat() if since_dt else None
+        targets: list[tuple[int, int | None]] = []
+        for chat_id in decision.chat_ids:
+            chat_topics: list[int | None] = [topic_id for topic_chat, topic_id in topics if topic_chat == chat_id]
+            targets.extend((chat_id, topic_id) for topic_id in chat_topics or [None])
+        if len(targets) > 3:
+            raise AgentQueryError(f"sync: {len(targets)} targets; at most 3 per call")
+        from .telegram_client import TelegramArchiveClient
+
+        seconds = max(5, int(policy.sync_max_seconds)) / len(targets)
+        client = TelegramArchiveClient(self.config, self.db)
+        titles = chat_titles(self.db, decision.chat_ids)
+        lines: list[str] = []
+        partial = False
+        total = 0
+        for chat_id, topic_id in targets:
+            result = asyncio.run(client.sync_chat(chat_id, topic_id=topic_id, since=since_dt, max_seconds=seconds))
+            topic_names = topic_titles(self.db, decision.chat_ids)
+            name = titles.get(chat_id) or str(chat_id)
+            if topic_id is not None:
+                name += f" /{topic_id} {topic_names.get(chat_id, {}).get(topic_id, '')}".rstrip()
+            span = f"{_day(result['oldest_date'])} → {_day(result['newest_date'])}" if result["stored"] else "empty"
+            state = "complete" if result["complete"] else (
+                f"Telegram rate limit until {result['retry_after']}" if result["retry_after"] else "partial (time limit) → call sync again"
+            )
+            partial = partial or not result["complete"]
+            total += result["fetched"]
+            lines.append(f"{name}: +{result['fetched']} fetched · {result['stored']} stored ({span}) · {state}")
+        refs = ", ".join(f"'{chat_id}/{topic_id}'" if topic_id is not None else str(chat_id) for chat_id, topic_id in targets)
+        lines.append(f"next: read(chats=[{refs}], since='{(since or '')[:10]}') or search(query, chats=…)")
+        header = f"sync since {(since or 'all')[:10]} · {total} msgs fetched" + (" · partial" if partial else "")
+        return ToolResult(_assemble(header, "\n".join(lines), []), total, decision.chat_ids)
 
     def search(self, args: dict[str, Any]) -> ToolResult:
         query = str(args.get("query", "")).strip()
@@ -243,7 +293,7 @@ class AgentTools:
         allowed = tuple(int(value) for value in policy.allowed_chat_ids)
         if not policy.enabled or not allowed:
             self._decide(AgentOperation.ARCHIVE_READ, allowed, None, None, None)
-        chats = resolve_chats(self.db, allowed, args.get("chats", args.get("chat_id")))
+        chats, topics = resolve_targets(self.db, allowed, args.get("chats", args.get("chat_id")))
         since = parse_when(args.get("since"), now=self._now())
         until = parse_when(args.get("until"), end=True, now=self._now())
         if since and until and since > until:
@@ -262,6 +312,7 @@ class AgentTools:
             allowed_media=allowed_media,
             sender_ids=sender_ids,
             sender_name=sender_name,
+            topics=tuple(pair for pair in topics if pair[0] in decision.chat_ids),
         )
         return scope, decision
 
@@ -293,7 +344,13 @@ class AgentTools:
         return min(ceiling, _bounded_int(args, "limit", 100, 1, 1000))
 
     def _render_context(self, chat_ids: Sequence[int], *, full: bool) -> RenderContext:
-        return RenderContext(titles=chat_titles(self.db, chat_ids), self_id=self_user_id(self.db), full=full, now=self._now())
+        return RenderContext(
+            titles=chat_titles(self.db, chat_ids),
+            self_id=self_user_id(self.db),
+            full=full,
+            now=self._now(),
+            topics=topic_titles(self.db, chat_ids),
+        )
 
     def _render_rows(self, rows: Sequence[AgentMessage], chat_ids: Sequence[int]) -> str:
         if not rows:
@@ -305,6 +362,13 @@ class AgentTools:
                 order.append(row.chat_id)
                 grouped[row.chat_id] = []
             grouped[row.chat_id].append(row)
+        for chat_id, items in grouped.items():
+            # Forum topics interleave in time; one block per topic reads as a conversation.
+            first_seen: dict[int | None, int] = {}
+            for index, item in enumerate(items):
+                if item is not None:
+                    first_seen.setdefault(item.topic_id, index)
+            grouped[chat_id] = sorted(items, key=lambda item: first_seen[item.topic_id] if item is not None else 0)
         return render_messages([(chat_id, grouped[chat_id]) for chat_id in order], self._render_context(chat_ids, full=False))
 
     def _fit_chronological(self, rows: list[AgentMessage], budget: int, chat_ids: Sequence[int]) -> tuple[list[AgentMessage], bool]:
@@ -423,6 +487,10 @@ def _period_label(scope: Scope) -> str:
     if not scope.since and not scope.until:
         return "all time"
     return f"{fmt(scope.since)} → {fmt(scope.until)}"
+
+
+def _day(value: str | None) -> str:
+    return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d") if value else "…"
 
 
 def _best_effort(function: Callable[..., Any], *args: Any, **kwargs: Any) -> None:

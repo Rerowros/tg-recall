@@ -18,6 +18,7 @@ from .storage import Database
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 _RELATIVE_RE = re.compile(r"^(\d+)\s*([mhdw])$")
 _CITATION_RE = re.compile(r"^(?:tg://chat/)?(-?\d+)(?:/message/|/)(\d+)$")
+_TME_RE = re.compile(r"^(?:https?://)?(?:t\.me|telegram\.me)/(c/)?([A-Za-z0-9_]+)(?:/(\d+))?(?:/(\d+))?/?(?:\?.*)?$", re.I)
 _STOPWORDS = frozenset(
     """
     и в во не что он на я с со как а то все она так его но да ты к у же вы за бы по только ее мне было вот от
@@ -46,6 +47,7 @@ class AgentMessage:
     media_type: str | None = None
     transcript: str | None = None
     hit: bool = False
+    topic_id: int | None = None
 
     @property
     def citation(self) -> str:
@@ -60,6 +62,8 @@ class ChatInfo:
     messages: int
     last_date: str | None
     last_synced_at: str | None
+    # Forum topics as (topic_id, title, messages), busiest first.
+    topics: tuple[tuple[int, str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,8 @@ class Scope:
     allowed_media: tuple[str, ...] | None = None  # policy restriction on media rows; None = all
     sender_ids: tuple[int, ...] | None = None
     sender_name: str | None = None
+    # Forum topics: a chat listed here is narrowed to these (chat_id, topic_id) pairs.
+    topics: tuple[tuple[int, int], ...] = ()
 
 
 class AgentQueryError(ValueError):
@@ -125,36 +131,95 @@ def _local_day_bound(day: date, *, end: bool) -> str:
 
 
 def resolve_chats(db: Database, allowed: Sequence[int], spec: Any) -> tuple[int, ...]:
-    """Resolve ids or title fragments against the allowlist only.
+    return resolve_targets(db, allowed, spec)[0]
 
-    A fragment that matches several allowed chats selects all of them, which
+
+def resolve_targets(db: Database, allowed: Sequence[int], spec: Any) -> tuple[tuple[int, ...], tuple[tuple[int, int], ...]]:
+    """Resolve chats (and forum topics) against the allowlist only.
+
+    Accepts ids, title fragments, t.me links (t.me/name/<topic>, t.me/c/<id>/<topic>)
+    and "<chat>/<topic>" where the topic is an id or a title fragment. A
+    fragment that matches several allowed chats selects all of them, which
     lets "BPN" cover every BPN chat in one call.
     """
 
     allowed_set = tuple(dict.fromkeys(int(value) for value in allowed))
     if spec is None or spec == "" or spec == []:
-        return allowed_set
+        return allowed_set, ()
     items = spec if isinstance(spec, list) else [spec]
     titles = _titles(db, allowed_set)
     chosen: list[int] = []
+    topics: list[tuple[int, int]] = []
     for item in items:
-        if isinstance(item, bool):
-            raise AgentQueryError("chats: expected chat id or title fragment")
-        if isinstance(item, int) or (isinstance(item, str) and re.fullmatch(r"-?\d+", item.strip())):
-            chat_id = int(item)
-            if chat_id not in allowed_set:
-                raise AgentQueryError(f"chat_not_allowed: {chat_id} is not in the AI allowlist")
-            chosen.append(chat_id)
+        if isinstance(item, bool) or not isinstance(item, (int, str)):
+            raise AgentQueryError("chats: expected chat id, title fragment or t.me link")
+        if isinstance(item, int) or re.fullmatch(r"-?\d+", item.strip()):
+            chosen.append(_allowed_chat(int(item), allowed_set))
             continue
-        if not isinstance(item, str):
-            raise AgentQueryError("chats: expected chat id or title fragment")
-        needle = item.strip().casefold()
-        matches = [chat_id for chat_id in allowed_set if needle and needle in titles.get(chat_id, "").casefold()]
+        text = item.strip()
+        link = _TME_RE.match(text)
+        if link:
+            chat_id = _link_chat(db, link, allowed_set)
+            chosen.append(chat_id)
+            topic = link.group(3)
+            if topic and _is_forum(db, chat_id):
+                topics.append((chat_id, int(topic)))
+            continue
+        matches = _title_matches(text, allowed_set, titles)
+        if not matches and "/" in text:
+            chat_part, topic_part = (part.strip() for part in text.rsplit("/", 1))
+            chats = [_allowed_chat(int(chat_part), allowed_set)] if re.fullmatch(r"-?\d+", chat_part) else _title_matches(chat_part, allowed_set, titles)
+            for chat_id in chats:
+                found = _topic_ids(db, chat_id, topic_part)
+                chosen.append(chat_id)
+                topics.extend((chat_id, topic_id) for topic_id in found)
+            if chats and not any(chat_id in dict(topics) for chat_id in chats):
+                raise AgentQueryError(f"chats: no forum topic matches {topic_part!r} in {', '.join(titles.get(c) or str(c) for c in chats)}")
+            if chats:
+                continue
         if not matches:
             known = ", ".join(f"{titles.get(chat_id) or chat_id}" for chat_id in allowed_set[:12])
             raise AgentQueryError(f"chats: no allowed chat matches {item!r}; allowed: {known}")
         chosen.extend(matches)
-    return tuple(dict.fromkeys(chosen))
+    return tuple(dict.fromkeys(chosen)), tuple(dict.fromkeys(topics))
+
+
+def _allowed_chat(chat_id: int, allowed: tuple[int, ...]) -> int:
+    if chat_id not in allowed:
+        raise AgentQueryError(f"chat_not_allowed: {chat_id} is not in the AI allowlist")
+    return chat_id
+
+
+def _title_matches(text: str, allowed: tuple[int, ...], titles: dict[int, str]) -> list[int]:
+    needle = text.casefold()
+    return [chat_id for chat_id in allowed if needle and needle in titles.get(chat_id, "").casefold()]
+
+
+def _link_chat(db: Database, link: re.Match[str], allowed: tuple[int, ...]) -> int:
+    if link.group(1):
+        return _allowed_chat(int(f"-100{link.group(2)}"), allowed)
+    username = link.group(2)
+    with db.connect() as conn:
+        row = conn.execute("SELECT chat_id FROM chats WHERE lower(username) = lower(?)", (username,)).fetchone()
+    if not row:
+        raise AgentQueryError(f"chats: no archived chat has username @{username}; run `tg-recall chats discover`")
+    return _allowed_chat(int(row["chat_id"]), allowed)
+
+
+def _is_forum(db: Database, chat_id: int) -> bool:
+    return bool(db.forum_topics([chat_id]).get(chat_id))
+
+
+def _topic_ids(db: Database, chat_id: int, spec: str) -> list[int]:
+    known = db.forum_topics([chat_id]).get(chat_id, {})
+    if re.fullmatch(r"\d+", spec):
+        return [int(spec)] if known else []
+    needle = spec.casefold()
+    return [topic_id for topic_id, title in known.items() if needle in title.casefold()]
+
+
+def topic_titles(db: Database, chat_ids: Iterable[int]) -> dict[int, dict[int, str]]:
+    return db.forum_topics(tuple(chat_ids))
 
 
 def list_chats(db: Database, chat_ids: Sequence[int], query: str | None = None) -> list[ChatInfo]:
@@ -189,6 +254,22 @@ def list_chats(db: Database, chat_ids: Sequence[int], query: str | None = None) 
         if query and query.casefold() not in info.title.casefold():
             continue
         result.append(info)
+    forums = db.forum_topics([info.chat_id for info in result])
+    if forums:
+        with db.connect() as conn:
+            for index, info in enumerate(result):
+                known = forums.get(info.chat_id)
+                if not known:
+                    continue
+                counts = {
+                    row["topic_id"]: row["n"]
+                    for row in conn.execute(
+                        "SELECT topic_id, COUNT(*) AS n FROM messages WHERE chat_id = ? AND topic_id IS NOT NULL GROUP BY topic_id",
+                        (info.chat_id,),
+                    )
+                }
+                ranked = sorted(known, key=lambda topic_id: counts.get(topic_id, 0), reverse=True)
+                result[index] = replace(info, topics=tuple((topic_id, known[topic_id], counts.get(topic_id, 0)) for topic_id in ranked))
     result.sort(key=lambda item: item.last_date or "", reverse=True)
     return result
 
@@ -344,7 +425,7 @@ def _epoch(value: str | None) -> float:
 
 _MESSAGE_COLUMNS = """
     m.chat_id, m.message_id, m.date, m.text, m.sender_id, m.sender_name, m.reply_to_message_id,
-    m.forward_from, m.media_type,
+    m.forward_from, m.media_type, m.topic_id,
     (SELECT t.text FROM media md JOIN transcripts t ON t.media_id = md.id
        WHERE md.chat_id = m.chat_id AND md.message_id = m.message_id AND t.status = 'success'
        ORDER BY t.id DESC LIMIT 1) AS transcript
@@ -375,15 +456,17 @@ def context_window(db: Database, scope: Scope, chat_id: int, message_id: int, be
     window_scope = replace(scope, media_types=None, sender_ids=None, sender_name=None)
     where, params = _scope_sql("m", window_scope)
     with db.connect() as conn:
+        anchor = conn.execute("SELECT topic_id FROM messages WHERE chat_id = ? AND message_id = ?", (chat_id, message_id)).fetchone()
+        topic_sql, topic_params = ("", []) if not anchor or anchor["topic_id"] is None else (" AND m.topic_id = ?", [anchor["topic_id"]])
         older = conn.execute(
-            f"SELECT {_MESSAGE_COLUMNS} FROM messages m WHERE m.chat_id = ? AND m.message_id < ?{where} "
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages m WHERE m.chat_id = ? AND m.message_id < ?{where}{topic_sql} "
             "ORDER BY m.message_id DESC LIMIT ?",
-            [chat_id, message_id, *params, before],
+            [chat_id, message_id, *params, *topic_params, before],
         ).fetchall()
         newer = conn.execute(
-            f"SELECT {_MESSAGE_COLUMNS} FROM messages m WHERE m.chat_id = ? AND m.message_id >= ?{where} "
+            f"SELECT {_MESSAGE_COLUMNS} FROM messages m WHERE m.chat_id = ? AND m.message_id >= ?{where}{topic_sql} "
             "ORDER BY m.message_id ASC LIMIT ?",
-            [chat_id, message_id, *params, after + 1],
+            [chat_id, message_id, *params, *topic_params, after + 1],
         ).fetchall()
     return [_message(row) for row in reversed(older)] + [_message(row) for row in newer]
 
@@ -503,6 +586,13 @@ def _scope_sql(alias: str, scope: Scope) -> tuple[str, list[Any]]:
     if scope.sender_name:
         parts.append(f"{alias}.sender_name LIKE ?")
         params.append(f"%{scope.sender_name}%")
+    if scope.topics:
+        topic_chats = tuple(dict.fromkeys(chat_id for chat_id, _ in scope.topics))
+        pairs = " OR ".join(f"({alias}.chat_id = ? AND {alias}.topic_id = ?)" for _ in scope.topics)
+        parts.append(f"({alias}.chat_id NOT IN ({', '.join('?' for _ in topic_chats)}) OR {pairs})")
+        params.extend(topic_chats)
+        for chat_id, topic_id in scope.topics:
+            params.extend([chat_id, topic_id])
     return " AND " + " AND ".join(parts), params
 
 
@@ -518,4 +608,5 @@ def _message(row: sqlite3.Row) -> AgentMessage:
         forward_from=row["forward_from"],
         media_type=row["media_type"],
         transcript=row["transcript"],
+        topic_id=row["topic_id"],
     )

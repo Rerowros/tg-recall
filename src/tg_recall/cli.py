@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from datetime import UTC, datetime, timedelta
@@ -54,6 +55,7 @@ from .release_updates import (
     stage_verified_wheel,
 )
 from .storage import Database, SchemaCompatibilityError
+from .agent_query import parse_when, resolve_targets
 from .telegram_client import TelegramArchiveClient, run_async
 from .transcription import FasterWhisperXXLProvider, TranscriptionService, WhisperCLIProvider
 from .wiki_memory import AuthorizedWikiScope, WikiMemoryStore
@@ -231,6 +233,15 @@ def build_parser() -> argparse.ArgumentParser:
     sync_run.add_argument("--limit", type=int, default=100)
     sync_run.add_argument("--backfill", action="store_true", help="Fetch messages older than the stored watermark")
     sync_run.set_defaults(handler=cmd_sync_run)
+    sync_chat = sync_sub.add_parser(
+        "chat",
+        help="Fill one chat or forum topic from --since to now in one run (no 1000-message cap)",
+        description="TARGET: chat id, title fragment, t.me link (t.me/name/<topic>) or '<chat>/<topic>'.",
+    )
+    sync_chat.add_argument("target")
+    sync_chat.add_argument("--since", default="30d", help="ISO date or 7d/24h/today (default 30d)")
+    sync_chat.add_argument("--max-seconds", type=float, default=3600.0)
+    sync_chat.set_defaults(handler=cmd_sync_chat)
     sync_ensure = sync_sub.add_parser("ensure", help="Create/update a scope and process its queued work")
     _add_scope_arguments(sync_ensure, include_name=True)
     sync_ensure.add_argument("--limit", type=int, default=500)
@@ -615,6 +626,9 @@ def _agent_operation_and_scope(args: argparse.Namespace) -> tuple[AgentOperation
                 result_limit=getattr(args, "limit", None),
             ),
         )
+    if command == "sync" and args.sync_command == "chat":
+        args._sync_targets = _sync_chat_targets(args)
+        return AgentOperation.SYNC, RequestedAgentScope(chat_ids=tuple(dict.fromkeys(chat_id for chat_id, _ in args._sync_targets)))
     if command == "sync":
         saved_scope = _saved_scope_for_agent(args) if args.sync_command == "run" else None
         return (
@@ -677,7 +691,9 @@ def _best_effort_policy_audit(cfg: AppConfig, decision: Any, requested: Requeste
 
 def emit(args: argparse.Namespace, value: Any, plain: str | None = None) -> int:
     if args.json:
-        print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+        # Agents pay per token; humans get the indented form.
+        indent = None if is_automation_shell() else 2
+        print(json.dumps(value, ensure_ascii=False, indent=indent, default=str))
     elif plain is not None:
         print(plain)
     elif isinstance(value, str):
@@ -1081,6 +1097,48 @@ def cmd_sync_run(args: argparse.Namespace) -> int:
     scope = db.get_scope(args.scope)
     effective_scope = _effective_sync_scope(scope, args._agent_policy)
     return emit(args, run_async(TelegramArchiveClient(cfg, db).sync_scope(args.scope, limit=args.limit, backfill=args.backfill, effective_scope=effective_scope)))
+
+
+def cmd_sync_chat(args: argparse.Namespace) -> int:
+    cfg, db = services(args)
+    targets = args._sync_targets
+    floors = [args.since, args._agent_policy.since if args._agent_policy is not None else None]
+    bounds = [datetime.fromisoformat(value) for value in (parse_when(item) for item in floors if item) if value]
+    since = max(bounds) if bounds else None
+    client = TelegramArchiveClient(cfg, db)
+    results = []
+    for chat_id, topic_id in targets:
+        result = run_async(
+            client.sync_chat(
+                chat_id,
+                topic_id=topic_id,
+                since=since,
+                max_seconds=args.max_seconds / len(targets),
+            )
+        )
+        results.append(result)
+        if not args.json:
+            where = f"{chat_id}/{topic_id}" if topic_id is not None else str(chat_id)
+            state = "complete" if result["complete"] else "partial: run again to continue"
+            print(f"{where}: +{result['fetched']} fetched, {result['stored']} stored ({result['oldest_date']} .. {result['newest_date']}), {state}")
+    return emit(args, results) if args.json else 0
+
+
+def _sync_chat_targets(args: argparse.Namespace) -> list[tuple[int, int | None]]:
+    """Resolve the target against archived chats; the agent policy then intersects the chat ids."""
+
+    cfg = load_config(args.config, home=args.home, profile=args.profile)
+    db = Database(cfg.db_path)
+    db.migrate()
+    known = [int(row["chat_id"]) for row in db.list_chats()]
+    target = int(args.target) if re.fullmatch(r"-?\d+", args.target.strip()) else args.target
+    if isinstance(target, int) and target not in known:
+        known.append(target)
+    chats, topics = resolve_targets(db, known, target)
+    if len(chats) != 1:
+        raise ValueError(f"sync chat: {args.target!r} matches {len(chats)} chats; use the chat id")
+    chat_topics: list[int | None] = [topic_id for chat_id, topic_id in topics if chat_id == chats[0]]
+    return [(chats[0], topic_id) for topic_id in chat_topics or [None]]
 
 
 def cmd_sync_ensure(args: argparse.Namespace) -> int:

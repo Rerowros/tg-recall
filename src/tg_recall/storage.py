@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 from .context_budgeting import ActualUsage, RetrievalStage
 from .hybrid_retrieval import (
@@ -258,6 +258,14 @@ MIGRATION_REGISTRY: tuple[Migration, ...] = (
             updated_at TEXT NOT NULL
         )""",
         "CREATE INDEX IF NOT EXISTS messages_chat_date_idx ON messages(chat_id, date)",
+        "CREATE INDEX IF NOT EXISTS messages_chat_topic_idx ON messages(chat_id, topic_id, date)",
+        """CREATE TABLE IF NOT EXISTS forum_topics (
+            chat_id INTEGER NOT NULL,
+            topic_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(chat_id, topic_id)
+        )""",
     )),
 )
 
@@ -431,6 +439,7 @@ class Database:
             self._ensure_column(conn, "sync_scopes", "media_policy", "TEXT NOT NULL DEFAULT 'none'")
             self._ensure_column(conn, "sync_scopes", "transcription_policy", "TEXT NOT NULL DEFAULT 'off'")
             self._ensure_column(conn, "media", "storage_key", "TEXT")
+            self._ensure_column(conn, "messages", "topic_id", "INTEGER")
             # v0.2 used the same core tables but recorded only an opaque
             # current version. Bootstrap it without touching archive rows.
             conn.execute(
@@ -1796,52 +1805,112 @@ class Database:
             return scopes
 
     def upsert_message(self, message: MessageRecord) -> None:
+        self.upsert_messages([message])
+
+    def upsert_messages(self, messages: Sequence[MessageRecord]) -> None:
+        """Write a page of messages in one transaction (one fsync, not one per message)."""
+
+        if not messages:
+            return
         with self.connect() as conn:
-            chat_title = self._chat_title(conn, message.chat_id)
-            conn.execute(
-                """
-                INSERT INTO messages(
-                    chat_id, message_id, date, text, sender_id, sender_name,
-                    reply_to_message_id, forward_from, edit_date, has_media, media_type,
-                    links_json, updated_at
-                )
-                VALUES (
-                    :chat_id, :message_id, :date, :text, :sender_id, :sender_name,
-                    :reply_to_message_id, :forward_from, :edit_date, :has_media, :media_type,
-                    :links_json, :updated_at
-                )
-                ON CONFLICT(chat_id, message_id) DO UPDATE SET
-                    date=excluded.date,
-                    text=excluded.text,
-                    sender_id=excluded.sender_id,
-                    sender_name=excluded.sender_name,
-                    reply_to_message_id=excluded.reply_to_message_id,
-                    forward_from=excluded.forward_from,
-                    edit_date=excluded.edit_date,
-                    has_media=excluded.has_media,
-                    media_type=excluded.media_type,
-                    links_json=excluded.links_json,
-                    updated_at=excluded.updated_at
-                """,
-                {
-                    **asdict(message),
-                    "date": message.date.isoformat(),
-                    "edit_date": message.edit_date.isoformat() if message.edit_date else None,
-                    "has_media": int(message.has_media),
-                    "updated_at": now_iso(),
-                },
+            titles: dict[int, str] = {}
+            for message in messages:
+                if message.chat_id not in titles:
+                    titles[message.chat_id] = self._chat_title(conn, message.chat_id)
+                self._upsert_message(conn, message, titles[message.chat_id])
+
+    def _upsert_message(self, conn: sqlite3.Connection, message: MessageRecord, chat_title: str) -> None:
+        row = conn.execute(
+            """
+            INSERT INTO messages(
+                chat_id, message_id, date, text, sender_id, sender_name,
+                reply_to_message_id, forward_from, edit_date, has_media, media_type,
+                links_json, topic_id, updated_at
             )
+            VALUES (
+                :chat_id, :message_id, :date, :text, :sender_id, :sender_name,
+                :reply_to_message_id, :forward_from, :edit_date, :has_media, :media_type,
+                :links_json, :topic_id, :updated_at
+            )
+            ON CONFLICT(chat_id, message_id) DO UPDATE SET
+                date=excluded.date,
+                text=excluded.text,
+                sender_id=excluded.sender_id,
+                sender_name=excluded.sender_name,
+                reply_to_message_id=excluded.reply_to_message_id,
+                forward_from=excluded.forward_from,
+                edit_date=excluded.edit_date,
+                has_media=excluded.has_media,
+                media_type=excluded.media_type,
+                links_json=excluded.links_json,
+                topic_id=COALESCE(excluded.topic_id, messages.topic_id),
+                updated_at=excluded.updated_at
+            RETURNING id
+            """,
+            {
+                **asdict(message),
+                "date": message.date.isoformat(),
+                "edit_date": message.edit_date.isoformat() if message.edit_date else None,
+                "has_media": int(message.has_media),
+                "updated_at": now_iso(),
+            },
+        ).fetchone()
+        if row:
+            conn.execute("DELETE FROM messages_fts WHERE rowid = ?", (row["id"],))
+            conn.execute(
+                "INSERT INTO messages_fts(rowid, text, chat_title) VALUES (?, ?, ?)",
+                (row["id"], message.text, chat_title),
+            )
+            self._upsert_semantic(conn, "message", row["id"], message.chat_id, message.message_id, message.text)
+
+    def upsert_forum_topics(self, chat_id: int, topics: Sequence[tuple[int, str]]) -> None:
+        if not topics:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO forum_topics(chat_id, topic_id, title, updated_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id, topic_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at
+                """,
+                [(chat_id, int(topic_id), str(title), now_iso()) for topic_id, title in topics],
+            )
+
+    def message_bounds(self, chat_id: int, topic_id: int | None = None) -> dict[str, Any] | None:
+        """Oldest/newest stored message of a chat, or of one forum topic."""
+
+        topic_sql = ""
+        params: list[Any] = [chat_id]
+        if topic_id is not None:
+            topic_sql = " AND topic_id = ?"
+            params.append(topic_id)
+        with self.connect() as conn:
             row = conn.execute(
-                "SELECT id FROM messages WHERE chat_id = ? AND message_id = ?",
-                (message.chat_id, message.message_id),
+                f"SELECT COUNT(*) AS n, MIN(message_id) AS oldest_id, MAX(message_id) AS newest_id, "
+                f"MIN(date) AS oldest_date, MAX(date) AS newest_date FROM messages WHERE chat_id = ?{topic_sql}",
+                params,
             ).fetchone()
-            if row:
-                conn.execute("DELETE FROM messages_fts WHERE rowid = ?", (row["id"],))
-                conn.execute(
-                    "INSERT INTO messages_fts(rowid, text, chat_title) VALUES (?, ?, ?)",
-                    (row["id"], message.text, chat_title),
-                )
-                self._upsert_semantic(conn, "message", row["id"], message.chat_id, message.message_id, message.text)
+        if not row or not row["n"]:
+            return None
+        return {
+            "count": row["n"],
+            "oldest_id": row["oldest_id"],
+            "newest_id": row["newest_id"],
+            "oldest_date": row["oldest_date"],
+            "newest_date": row["newest_date"],
+        }
+
+    def forum_topics(self, chat_ids: Sequence[int]) -> dict[int, dict[int, str]]:
+        if not chat_ids:
+            return {}
+        marks = ",".join("?" for _ in chat_ids)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT chat_id, topic_id, title FROM forum_topics WHERE chat_id IN ({marks})", list(chat_ids)
+            ).fetchall()
+        topics: dict[int, dict[int, str]] = {}
+        for row in rows:
+            topics.setdefault(row["chat_id"], {})[row["topic_id"]] = row["title"]
+        return topics
 
     def update_sync_state(
         self,
