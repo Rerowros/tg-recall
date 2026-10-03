@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from tg_recall import cli
+from tg_recall import cli, transcription
 from tg_recall.cli import build_parser, main
 from tg_recall.config import AppConfig, TranscriptionConfig, save_config
 from tg_recall.models import ChatRecord, MessageRecord
@@ -21,7 +21,7 @@ def test_local_provider_factory_passes_spaced_executable_as_one_typed_value(tmp_
             observed["output_dir"] = output_dir
             observed.update(kwargs)
 
-    monkeypatch.setattr(cli, "FasterWhisperXXLProvider", Provider)
+    monkeypatch.setattr(transcription, "FasterWhisperXXLProvider", Provider)
     cfg.transcription = TranscriptionConfig(
         backend="faster-whisper-xxl",
         executable=str(executable),
@@ -34,7 +34,7 @@ def test_local_provider_factory_passes_spaced_executable_as_one_typed_value(tmp_
         timeout_seconds=900,
     )
 
-    cli._local_transcription_provider(cfg)
+    transcription.local_transcription_provider(cfg)
 
     assert observed["executable"] == str(executable)
     assert observed["model_dir"] == str(tmp_path / "local models")

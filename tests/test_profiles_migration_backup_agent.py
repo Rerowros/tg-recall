@@ -78,8 +78,26 @@ def test_cli_surface_is_the_small_core(capsys) -> None:
 
     from tg_recall.cli import build_parser
 
-    commands = next(action for action in build_parser()._actions if isinstance(action, argparse._SubParsersAction)).choices
+    commands = next(
+        action for action in build_parser()._actions if isinstance(action, argparse._SubParsersAction)
+    ).choices
     assert set(commands) == {
-        "setup", "doctor", "config", "telegram", "chats", "sync", "search", "read", "export",
-        "media", "transcribe", "jobs", "index", "security", "backup", "purge",
+        "setup",
+        "doctor",
+        "config",
+        "telegram",
+        "chats",
+        "sync",
+        "search",
+        "read",
+        "export",
+        "media",
+        "transcribe",
+        "jobs",
+        "index",
+        "security",
+        "backup",
+        "purge",
+        "stats",
+        "usage",
     }

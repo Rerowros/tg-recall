@@ -2,10 +2,33 @@
 
 [English](CHANGELOG.md) | [Русский](CHANGELOG.ru.md)
 
-## Unreleased
+## v0.8.0 - 2026-10-03
+
+Agents can now work with big periods cheaply: `stats` counts instead of reading, `export` writes a whole period to a file, and `sync` no longer blocks the agent. The owner can see how agents use the archive with `tg-recall usage`.
+
+### Upgrade notes
+
+- Upgrade: `uv tool install --force https://github.com/Rerowros/tg-recall/releases/download/v0.8.0/tg_recall-0.8.0-py3-none-any.whl`.
+- The default of `ai_access.sync_max_seconds` changed from `50` to `20`: it is now how long one MCP `sync` call waits before the download continues in the background. A config saved by an earlier version keeps its value; to use the new default, run `tg-recall config set ai_access.sync_max_seconds 20`.
+- `transcribe` is off until the owner sets `ai_access.allow_transcribe` to `true`. Agent `export` is on by default (up to `50000` messages per file); `tg-recall config set ai_access.max_export_messages 0` removes it.
+
+### Added
+
+- MCP `stats(chats, since, until, from, media, query, by)` and `tg-recall stats [--query] [--by day|week|month]` with the usual scope flags: messages per day, week or month (with `query`, hits per period), top senders, forum topics and chats. A few hundred tokens instead of reading thousands of messages.
+- MCP `export(chats, since, until, from, media)`: writes a whole period or topic, full text, in `read`'s one-line format with a date on every line, to a file in the profile's `exports` directory. Returns the path, line count, token estimate and a suggested chunk size; agents read the file with their own file tools. Limited by `ai_access.max_export_messages` (default `50000`; `0` removes the tool). CLI: `tg-recall export --chat ID[/TOPIC] --format text` (the owner may pass `--output`).
+- MCP `transcribe(refs)` for up to 5 `tg://` citations, only with `ai_access.allow_transcribe=true` (default `false`): downloads the cited voice, audio or video from Telegram and transcribes it with the configured local `transcription.*` provider when available, otherwise with Telegram's own transcription (needs Telegram Premium). Returns the text; transcripts become searchable.
+- Usage log: every MCP call and every CLI tool call from an agent shell is recorded as an `agent_call` audit row with the tool, client, arguments (query, chats, dates, limits; never message text), output tokens, latency and error code. `tg-recall usage [--since 7d] [--client NAME]` (owner only) shows per tool calls, errors, empty results, average and max tokens and average latency, plus error codes, empty searches, identical calls within 120 s, searches retried after an empty result and `read` pages of 100+ messages.
+- `ai_access.sync_background_minutes` (default `30`), `ai_access.max_export_messages` (default `50000`) and `ai_access.allow_transcribe` (default `false`).
+
+### Changed
+
+- MCP `sync` no longer blocks: a call waits `ai_access.sync_max_seconds` (default now `20`, was `50`), then the download continues in the background in the MCP server process (limit `ai_access.sync_background_minutes`) with progress, Telegram's message count for the chat or topic, and an ETA. While it runs, `search` and `read` add a note and skip auto-refresh. A bare `sync()` reports the current or last download (the last one for 10 minutes), otherwise it updates all allowed chats. One download runs at a time. The CLI `sync` still blocks and prints progress to stderr.
+- `search` query syntax: words (all must match, then any), `a | b` alternatives (synonyms, other languages), `"exact phrase"` and `-word` to exclude. `stats` with `query` counts the messages that match it (all words, without the any-word fallback).
+- The MCP initialize instructions point agents to `stats` and `export` for big periods and explain the background `sync`.
 
 ### Fixed
 
+- A chat and topic reference like `PasarGuard/157` no longer also selects a same-named chat that lacks that topic (for example a project's channel next to its forum).
 - Forum messages archived before 0.7 get their topic on the next start: a reply to a topic root becomes membership, a message without a reply goes to General, replies inherit their parent's topic. On a real archive this placed 43.8k of 46k such rows; rows whose parent is not archived stay without a topic.
 - `export` takes a forum topic (`--chat <chat>/<topic>`, `t.me/c/<id>/<topic>` or `--topic`), adds `topic_id` and `topic_title` to each row and no longer stops silently at 100,000 messages; with `--limit` it reports `truncated`.
 - A long `sync` prints progress to stderr every 10 seconds, so it is visibly alive.
