@@ -56,6 +56,54 @@ class ConservativeUtf8JsonTokenCounter:
         return len(serialized_payload)
 
 
+# Per-character token weights for the default estimator, calibrated against the
+# sanitized fixtures below: prose lands within about +/-15% of a BPE count, while
+# URLs and emoji are over-estimated (the safe direction for a budget).
+_CHARCLASS_WEIGHTS = {"letter": 0.25, "digit": 0.5, "space": 0.15, "punct": 0.6, "cyrillic": 0.45, "bmp": 1.0, "astral": 2.0}
+_CHARCLASS_MARGIN = 1.1
+
+
+def estimate_text_tokens(text: str) -> int:
+    """Estimate model tokens for text without a tokenizer (Cyrillic-aware)."""
+
+    total = 0.0
+    weights = _CHARCLASS_WEIGHTS
+    for char in text:
+        if char.isascii():
+            if char.isalpha():
+                total += weights["letter"]
+            elif char.isdigit():
+                total += weights["digit"]
+            elif char.isspace():
+                total += weights["space"]
+            else:
+                total += weights["punct"]
+        elif "Ѐ" <= char <= "ӿ":
+            total += weights["cyrillic"]
+        elif ord(char) > 0xFFFF:
+            total += weights["astral"]
+        else:
+            total += weights["bmp"]
+    return math.ceil(total * _CHARCLASS_MARGIN)
+
+
+@dataclass(frozen=True)
+class CharClassTokenCounter:
+    """Default estimator: character-class weights instead of one token per UTF-8 byte.
+
+    The byte counter charges Cyrillic twice and inflated real payloads ~4x, so
+    agents received a quarter of the evidence they asked for and had to widen.
+    """
+
+    name: str = "charclass"
+    version: str = "1"
+
+    def count(self, serialized_payload: bytes) -> int:
+        if not isinstance(serialized_payload, bytes):
+            raise TypeError("serialized_payload must be bytes")
+        return estimate_text_tokens(serialized_payload.decode("utf-8"))
+
+
 @dataclass(frozen=True)
 class CalibrationFixture:
     """Sanitized payload and optional independently measured reference count."""
@@ -484,7 +532,7 @@ def build_bounded_retrieval(
     turning a small retrieval into an accidental archive export.
     """
 
-    selected_counter = counter or ConservativeUtf8JsonTokenCounter()
+    selected_counter = counter or CharClassTokenCounter()
     if retries > budgets.retry_budget or tool_calls > budgets.tool_call_budget:
         return _empty_result(
             RetrievalOutcome.BUDGET_EXHAUSTED,
