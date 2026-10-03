@@ -2,17 +2,51 @@
 
 [English](CHANGELOG.md) | [Русский](CHANGELOG.ru.md)
 
-## Unreleased
+## v0.7.0 - 2026-10-03
 
-- Make `tg-recall-mcp` exit on stdin EOF, supervising parent death, unused timeout (`TG_RECALL_MCP_UNUSED_TIMEOUT_SEC`, default `600`), or idle timeout (`TG_RECALL_MCP_IDLE_TIMEOUT_SEC`, default `1800`). Set a timeout to `0` to disable it; set `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping.
-- Replace the MCP tools with `search`, `read` and `chats`: compact text, one line per message, sized to a token budget, with `tg://` citations. `read()` with no arguments returns what is new since this client's last read (first call: last 24h), a fair share per chat. The old `list_allowed_chats`, `list_scopes`, `search_messages`, `get_message_context`, `ask_archive` and `retrieve_evidence` tools are removed; research-session tools are exposed only with `ai_access.mcp_research_tools=true`.
+tg-recall is now a small core: a local Telegram archive plus `search`, `read`, `chats` and `sync` for you and your AI agents, over MCP or the CLI. Features that the calling agent does better itself were removed. This is a breaking release.
+
+### Upgrade notes
+
+- Back up first: `tg-recall backup create --mode essential --output D:\Backups\tg-recall-before-0.7.zip`.
+- On first run the archive is migrated: `semantic_index`, the embedding tables and sync scopes are dropped; wiki and research tables are dropped only when empty; then the file is compacted (`VACUUM`) when that frees a lot of space. Chats, messages, media and transcripts are kept.
+- MCP clients now get `search`, `read` and `chats` (plus `sync` with `ai_access.allow_sync=true`) instead of `list_allowed_chats`, `list_scopes`, `search_messages`, `get_message_context`, `ask_archive` and `retrieve_evidence`. The server command is still `tg-recall-mcp`.
+- Scopes are gone: replace `scopes create` with `sync run` / `sync ensure` by `tg-recall sync <chat> --since <date>`, and list the chats agents may use in `ai_access.allowed_chat_ids` (or set `ai_access.allow_all_chats`).
+- Old config files still load; keys of removed features (`llm`, `semantic`, `provider_policy`, `ai_access.mcp_research_tools`) are ignored.
+- Upgrade: `uv tool install --force https://github.com/Rerowros/tg-recall/releases/download/v0.7.0/tg_recall-0.7.0-py3-none-any.whl` (the self-updating `tg-recall update` is gone).
+
+### Removed
+
+- `ask` and `retrieve`, in-tool LLM answers and the OpenAI Responses provider.
+- Semantic and hybrid search and embeddings (local sentence-transformers, OpenRouter): `config embeddings`, `index embeddings` and the per-message `semantic_index`. Search is local full-text search (SQLite FTS5).
+- Research sessions, evidence sets and the knowledge catalog, including their MCP tools.
+- Wiki memory; backups no longer include the wiki folder.
+- Export packs (`pack`).
+- `integrate` harness installers, `agent guide`, Codex model routing and the versionless agent-setup prompt.
+- `update` self-update.
+- `migrate legacy`, the `tg-ecosystem` / `tg-ecosystem-mcp` aliases and `TG_ECOSYSTEM_HOME`.
+- Sync scopes (`scopes`, `sync run`, `sync ensure`) and the 1000-message cap per run.
+- The `local-embeddings` and `openai-responses` extras, the `llm`, `semantic` and `provider_policy` config sections and `ai_access.mcp_research_tools`.
+
+### Added
+
+- Compact `search`, `read` and `chats` for MCP and the CLI: one line per message, sized to a token budget; `>` marks a hit, `↩N` a reply, and a `cite:` line lists `tg://` citations. `read()` without arguments returns what is new since this client's last read (first call: last 24h), a fair share per chat. With `--json` the CLI returns `{"text", "count", "chat_ids"}`. The owner at a terminal sees every archived chat; inside an AI agent shell only `ai_access` chats apply.
+- Forum topics: select them by t.me link (`t.me/<username>/<topic>`, `t.me/c/<id>/<topic>`) or `<chat>/<topic>`; `chats` lists topics, and each message stores its topic and title.
+- `tg-recall sync [TARGET...] [--since] [--max-seconds] [--media]`: brings chats or forum topics up to date over one Telegram connection. A chat never synced starts 30 days back, `--since` also fetches older history, and a topic is fetched alone instead of the whole group. Runs are interruption-safe and write in batches; FloodWait is saved and respected; `--media` queues media for download. Without targets it updates the allowlist, or every chat with messages.
+- A lock file per Telegram session: a second process fails with `busy` instead of waiting.
+- MCP `sync` tool (only with `ai_access.allow_sync=true`): reads Telegram only, stays within the allowlist and policy dates, is time-boxed by `sync_max_seconds` (`50`) and resumes on the next call. With `allow_sync`, agent `search` and `read` first pull new messages for chats synced more than `auto_refresh_minutes` (`10`) ago; failures (busy session, rate limit) only add a note.
+- `ai_access` keys `allow_all_chats` (every archived chat is allowed), `max_read_messages` (`200`), `instructions_list_chats` (`false`), `allow_sync` (`false`), `sync_max_seconds` and `auto_refresh_minutes`; `max_results` now defaults to `20`. `config set` accepts list values as `1,2`, `[1, 2]` or `1 2`.
 - MCP rejects unknown arguments with a did-you-mean hint, accepts `chat_id` as an alias of `chats`, and picks up config edits without a restart.
-- Select forum topics by t.me link (`t.me/<username>/<topic>`, `t.me/c/<id>/<topic>`) or `<chat>/<topic>`; `chats()` lists topics. Topics are stored per message with their titles.
-- Add `ai_access` keys `max_read_messages` (`200`), `mcp_research_tools`, `instructions_list_chats`, `allow_sync` (all `false`) and `sync_max_seconds` (`50`); `max_results` now defaults to `20`.
-- Add an optional MCP `sync` tool (only with `ai_access.allow_sync=true`): downloads up to 3 allowed chats or topics since a date (default `30d`) into the local archive, reads Telegram only, time-boxed and resumable.
-- Add `tg-recall sync chat <target> [--since 30d] [--max-seconds 3600]`: fills one chat or forum topic from a date to now in one interruption-safe run without the 1000-message cap; a topic is fetched alone instead of the whole group. Writes are batched per page; a lock file makes a second process on the same Telegram session fail with `busy`.
-- Store forwards as a short origin label; `telegram check` records the owner's id so agent output shows the owner as `я`.
+- `tg-recall-mcp` exits on stdin EOF, supervising parent death, unused timeout (`TG_RECALL_MCP_UNUSED_TIMEOUT_SEC`, default `600`) or idle timeout (`TG_RECALL_MCP_IDLE_TIMEOUT_SEC`, default `1800`). Set a timeout to `0` to disable it; set `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping.
+- Forwards are stored with a short origin label; `telegram check` records the owner's id so agent output shows the owner as `я`.
 - `--json` output is compact (no indentation) when run by an AI agent.
+
+### Fixed
+
+- Never prompt for a Telegram login outside `telegram auth`: `doctor`, `sync` and MCP fail fast with a clear error when the session is missing.
+- Write CLI and MCP stdio as UTF-8 regardless of the Windows console code page; MCP no longer answers JSON-RPC notifications.
+- Treat Claude Code and Codex shells (`CLAUDECODE`, `AI_AGENT`, `CODEX_*` without a TTY) as automation, so agent policy applies to their CLI calls.
+- Estimate tokens by character class (Cyrillic, Latin, digits, emoji) instead of one token per UTF-8 byte, so budgets fit about twice as much Russian text.
 
 ## v0.6.0 - 2026-08-04
 

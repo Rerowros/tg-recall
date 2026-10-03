@@ -23,6 +23,8 @@ GENERAL_TOPIC = 1
 WRITE_BATCH = 200
 # Pause between 100-message pages; Telegram tolerates this and FloodWait is still honoured.
 SYNC_WAIT_SECONDS = 0.3
+# How far back the first sync of a chat goes when no --since is given.
+FIRST_SYNC = timedelta(days=30)
 
 
 class TelegramDependencyError(RuntimeError):
@@ -195,85 +197,6 @@ class TelegramArchiveClient:
         self.db.audit("telegram_chats_discovered", details={"count": len(chats)})
         return chats
 
-    async def sync_scope(
-        self,
-        scope_name: str,
-        limit: int = 100,
-        backfill: bool = False,
-        effective_scope: dict[str, Any] | None = None,
-    ) -> dict[str, int]:
-        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1_000:
-            raise ValueError("sync limit must be an integer in 1..1000")
-        scope = effective_scope or self.db.get_scope(scope_name)
-        if not scope:
-            raise ValueError(f"Unknown sync scope: {scope_name}")
-        if not scope["chat_ids"]:
-            raise ValueError(f"Sync scope has no chats: {scope_name}")
-
-        client = self._client()
-        _, FloodWaitError = _load_telethon()
-        synced = 0
-        media_jobs = 0
-        async with client:
-            for chat_id in scope["chat_ids"]:
-                newest_id: int | None = None
-                oldest_id: int | None = None
-                since = parse_date(scope.get("since"))
-                until = parse_date(scope.get("until"))
-                state = self.db.get_sync_state(chat_id)
-                if state and _retry_is_pending(state.get("retry_after")):
-                    raise TelegramRetryPendingError(chat_id, state["retry_after"])
-                iterator_args: dict[str, Any] = {"limit": limit}
-                if backfill and state and state.get("oldest_message_id"):
-                    iterator_args["max_id"] = state["oldest_message_id"]
-                elif not backfill and state and state.get("newest_message_id"):
-                    iterator_args["min_id"] = state["newest_message_id"]
-                forum = self._is_forum(chat_id)
-                batch: list[MessageRecord] = []
-                try:
-                    async for message in client.iter_messages(chat_id, **iterator_args):
-                        message_date = ensure_aware(message.date)
-                        if until and message_date > until:
-                            continue
-                        if since and message_date < since:
-                            break
-                        record = message_from_telethon(chat_id, message, forum=forum)
-                        batch.append(record)
-                        newest_id = max(newest_id or record.message_id, record.message_id)
-                        oldest_id = min(oldest_id or record.message_id, record.message_id)
-                        synced += 1
-                        if len(batch) >= WRITE_BATCH:
-                            media_jobs += self._store_batch(batch, scope["media_policy"], scope["transcription_policy"])
-                    media_jobs += self._store_batch(batch, scope["media_policy"], scope["transcription_policy"])
-                    # A completed forward page can safely advance its high
-                    # watermark. A completed historical page advances only
-                    # the low watermark. Both values stay monotonic in the
-                    # repository and are independent cursors.
-                    self.db.update_sync_state(
-                        chat_id,
-                        newest_message_id=None if backfill else newest_id,
-                        oldest_message_id=oldest_id if backfill else oldest_id,
-                        retry_after=None,
-                    )
-                except FloodWaitError as exc:
-                    self._store_batch(batch, scope["media_policy"], scope["transcription_policy"])
-                    retry_after = (datetime.now(UTC) + timedelta(seconds=exc.seconds)).isoformat()
-                    # Telegram yields newest-first. Advancing the forward
-                    # high watermark after a partial page could skip unseen
-                    # messages below it, so forward retry deliberately
-                    # replays idempotent upserts. Historical backfill is
-                    # safe to checkpoint at its low watermark because the
-                    # next page continues strictly older history.
-                    self.db.update_sync_state(
-                        chat_id,
-                        oldest_message_id=oldest_id if backfill else None,
-                        retry_after=retry_after,
-                    )
-                    self.db.audit("telegram_flood_wait", scope_name, chat_id=chat_id, seconds=exc.seconds)
-                    raise
-        self.db.audit("telegram_scope_synced", scope_name, messages=synced, media_jobs=media_jobs, backfill=backfill)
-        return {"messages": synced, "media_jobs": media_jobs, "backfill": int(backfill)}
-
     async def download_pending_media(self, limit: int = 20, media_ids: set[int] | None = None) -> dict[str, int]:
         client = self._client()
         async with client:
@@ -390,60 +313,97 @@ class TelegramArchiveClient:
         since: datetime | None = None,
         max_seconds: float = 60.0,
         max_messages: int = 100_000,
+        media: str = "none",
     ) -> dict[str, Any]:
-        """Fill one chat (or one forum topic) from ``since`` to now in a single connection.
+        results = await self.sync_many([(chat_id, topic_id)], since=since, max_seconds=max_seconds, max_messages=max_messages, media=media)
+        return results[0]
 
-        Two interruption-safe passes: newer than the newest stored message,
-        oldest-first, so a stop never leaves a gap below the watermark; then
-        older than the oldest stored message, newest-first, down to ``since``.
-        A forum topic is fetched by itself (GetReplies), not the whole group.
+    async def sync_many(
+        self,
+        targets: list[tuple[int, int | None]],
+        *,
+        since: datetime | None = None,
+        max_seconds: float = 60.0,
+        max_messages: int = 100_000,
+        media: str = "none",
+    ) -> list[dict[str, Any]]:
+        """Bring chats (or forum topics) up to date over one Telegram connection.
+
+        Per target: messages newer than the newest stored one, oldest-first, so
+        a stop never leaves a gap; then, only when ``since`` asks for history
+        the archive lacks, older messages newest-first down to ``since``. A
+        chat never synced before starts ``FIRST_SYNC`` back. A forum topic is
+        fetched by itself (GetReplies), not the whole group. ``media`` lists
+        media types to queue for download ("none", "all" or "voice,audio").
         """
 
         if since is not None:
             since = ensure_aware(since)
+        for chat_id, _ in targets:
+            state = self.db.get_sync_state(chat_id)
+            if state and _retry_is_pending(state.get("retry_after")):
+                raise TelegramRetryPendingError(chat_id, state["retry_after"])
         client = self._client()
-        _, FloodWaitError = _load_telethon()
         deadline = time.monotonic() + max_seconds
+        results: list[dict[str, Any]] = []
+        async with client:
+            for chat_id, topic_id in targets:
+                result = await self._sync_target(client, chat_id, topic_id, since, deadline, max_messages, media)
+                results.append(result)
+                if result["retry_after"]:
+                    break
+        return results
+
+    async def _sync_target(
+        self,
+        client: Any,
+        chat_id: int,
+        topic_id: int | None,
+        since: datetime | None,
+        deadline: float,
+        max_messages: int,
+        media: str,
+    ) -> dict[str, Any]:
+        _, FloodWaitError = _load_telethon()
         fetched = 0
         complete = True
         retry_after: str | None = None
         reply_to = topic_id if topic_id not in (None, GENERAL_TOPIC) else None
-        async with client:
-            forum = await self._refresh_topics(client, chat_id)
-            bounds = self.db.message_bounds(chat_id, topic_id)
-            passes: list[dict[str, Any]] = []
-            if bounds:
-                passes.append({"min_id": bounds["newest_id"], "reverse": True})
-                oldest_date = ensure_aware(datetime.fromisoformat(bounds["oldest_date"]))
-                if since is None or oldest_date > since:
-                    passes.append({"max_id": bounds["oldest_id"]})
-            else:
-                passes.append({})
-            try:
-                for extra in passes:
-                    batch: list[MessageRecord] = []
-                    reverse = bool(extra.get("reverse"))
-                    async for message in client.iter_messages(chat_id, limit=None, reply_to=reply_to, wait_time=SYNC_WAIT_SECONDS, **extra):
-                        if since and not reverse and ensure_aware(message.date) < since:
-                            break
-                        record = message_from_telethon(chat_id, message, forum=forum)
-                        if topic_id == GENERAL_TOPIC and record.topic_id not in (None, GENERAL_TOPIC):
-                            continue
-                        batch.append(record)
-                        fetched += 1
-                        if len(batch) >= WRITE_BATCH:
-                            self._store_batch(batch, "none", "off")
-                        if fetched >= max_messages or time.monotonic() > deadline:
-                            complete = False
-                            break
-                    self._store_batch(batch, "none", "off")
-                    if not complete:
+        forum = await self._refresh_topics(client, chat_id)
+        bounds = self.db.message_bounds(chat_id, topic_id)
+        passes: list[dict[str, Any]] = []
+        if bounds:
+            passes.append({"min_id": bounds["newest_id"], "reverse": True})
+            if since is not None and ensure_aware(datetime.fromisoformat(bounds["oldest_date"])) > since:
+                passes.append({"max_id": bounds["oldest_id"]})
+        else:
+            since = since or datetime.now(UTC) - FIRST_SYNC
+            passes.append({})
+        batch: list[MessageRecord] = []
+        try:
+            for extra in passes:
+                reverse = bool(extra.get("reverse"))
+                async for message in client.iter_messages(chat_id, limit=None, reply_to=reply_to, wait_time=SYNC_WAIT_SECONDS, **extra):
+                    if since and not reverse and ensure_aware(message.date) < since:
                         break
-            except FloodWaitError as exc:
-                self._store_batch(batch, "none", "off")
-                complete = False
-                retry_after = (datetime.now(UTC) + timedelta(seconds=exc.seconds)).isoformat()
-        self.db.update_sync_state(chat_id, retry_after=None)
+                    record = message_from_telethon(chat_id, message, forum=forum)
+                    if topic_id == GENERAL_TOPIC and record.topic_id not in (None, GENERAL_TOPIC):
+                        continue
+                    batch.append(record)
+                    fetched += 1
+                    if len(batch) >= WRITE_BATCH:
+                        self._store_batch(batch, media, "off")
+                    if fetched >= max_messages or time.monotonic() > deadline:
+                        complete = False
+                        break
+                self._store_batch(batch, media, "off")
+                if not complete:
+                    break
+        except FloodWaitError as exc:
+            self._store_batch(batch, media, "off")
+            complete = False
+            retry_after = (datetime.now(UTC) + timedelta(seconds=exc.seconds)).isoformat()
+        self.db.update_sync_state(chat_id, retry_after=retry_after)
         self.db.audit("telegram_chat_synced", str(chat_id), chat_id=chat_id, topic_id=topic_id, messages=fetched, complete=complete)
         after = self.db.message_bounds(chat_id, topic_id)
         return {
@@ -630,15 +590,6 @@ def _job_needs_transcription(payload_json: str) -> bool:
         return json.loads(payload_json).get("transcription_policy", "auto") != "off"
     except json.JSONDecodeError:
         return True
-
-
-def parse_date(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed
 
 
 def ensure_aware(value: datetime) -> datetime:

@@ -10,7 +10,7 @@ tg-recall backup create --mode full --output D:\Backups\tg-recall-full.zip
 tg-recall backup create --mode full --include-session --output D:\Backups\tg-recall-full-session.zip
 ```
 
-`essential` contains a consistent SQLite snapshot, profile configuration and wiki. `full` additionally includes the deduplicated media object store. Session and credentials are intentionally absent unless `--include-session` is supplied.
+`essential` contains a consistent SQLite snapshot and the profile configuration. `full` additionally includes the deduplicated media object store. Session and credentials are intentionally absent unless `--include-session` is supplied.
 
 Restore into a new profile by default:
 

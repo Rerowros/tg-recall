@@ -1,6 +1,6 @@
 [project]
 name = "tg-recall"
-version = "0.6.0"
+version = "0.7.0"
 description = "Local-first, profile-aware Telegram archive with CLI and MCP access for AI agents."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -28,12 +28,6 @@ Repository = "https://github.com/Rerowros/tg-recall"
 Issues = "https://github.com/Rerowros/tg-recall/issues"
 
 [project.optional-dependencies]
-local-embeddings = [
-  "sentence-transformers>=5.0.0",
-]
-openai-responses = [
-  "openai>=2.0.0,<3",
-]
 dev = [
   "pytest>=8.0.0",
   "ruff>=0.8.0",
@@ -42,8 +36,6 @@ dev = [
 [project.scripts]
 tg-recall = "tg_recall.cli:main"
 tg-recall-mcp = "tg_recall.mcp_server:main"
-tg-ecosystem = "tg_recall.cli:legacy_main"
-tg-ecosystem-mcp = "tg_recall.mcp_server:legacy_main"
 
 [build-system]
 requires = ["hatchling"]

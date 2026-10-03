@@ -39,6 +39,8 @@ from .storage import Database
 
 MEDIA_CHOICES = ("voice", "audio", "photo", "video", "document", "any")
 MAX_BUDGET = 20000
+AUTO_REFRESH_SECONDS = 8.0
+AUTO_REFRESH_CHATS = 10
 NEW_WINDOW = timedelta(hours=24)
 
 
@@ -49,70 +51,113 @@ class ToolResult:
     chat_ids: tuple[int, ...]
 
 
+def allowed_chat_ids(config: AppConfig, db: Database) -> tuple[int, ...]:
+    """Chats agents may see: the allowlist, or every archived chat with allow_all_chats."""
+
+    policy = config.ai_access
+    if policy.allow_all_chats:
+        with db.connect() as conn:
+            return tuple(row[0] for row in conn.execute("SELECT chat_id FROM chats ORDER BY chat_id"))
+    return tuple(dict.fromkeys(int(value) for value in policy.allowed_chat_ids))
+
+
 class AgentTools:
-    def __init__(self, config: AppConfig, db: Database, *, client: str = "unknown", now: Callable[[], datetime] | None = None):
+    """search / read / chats / sync over the archive.
+
+    Agents (MCP, CLI in an agent shell) see only ``ai_access`` chats and
+    policy bounds. ``owner=True`` is the human at a terminal: every archived
+    chat, no policy, no auto-refresh.
+    """
+
+    def __init__(
+        self,
+        config: AppConfig,
+        db: Database,
+        *,
+        client: str = "unknown",
+        owner: bool = False,
+        now: Callable[[], datetime] | None = None,
+    ):
         self.config = config
         self.db = db
         self.client = client
+        self.owner = owner
         self._now = now or (lambda: datetime.now(UTC))
+        self._refresh_note: str | None = None
 
     # ------------------------------------------------------------ tools
 
     def chats(self, args: dict[str, Any]) -> ToolResult:
         decision = self._decide(AgentOperation.METADATA_LIST, None, None, None, None)
-        allowed = tuple(int(value) for value in self.config.ai_access.allowed_chat_ids)
-        found = list_chats(self.db, allowed, args.get("query"))
-        return ToolResult(render_chat_list(found, self._now()), len(found), tuple(item.chat_id for item in found) or decision.chat_ids)
+        found = list_chats(self.db, self._allowed(), args.get("query"))
+        if self.owner and not args.get("all"):
+            found = [item for item in found if item.messages] or found
+        return ToolResult(render_chat_list(found, self._now(), owner=self.owner), len(found), tuple(item.chat_id for item in found) or decision.chat_ids)
 
     def sync(self, args: dict[str, Any]) -> ToolResult:
-        """Download one chat or forum topic (up to 3 targets) from Telegram into the archive."""
+        """Download chats or forum topics from Telegram into the archive.
+
+        No chats: every allowed chat (owner: allowlist, else every archived
+        chat). Without since a known chat gets only new messages and an
+        unknown one its last 30 days.
+        """
 
         policy = self.config.ai_access
-        if not policy.allow_sync:
+        if not self.owner and not policy.allow_sync:
             raise AgentQueryError("sync is off; the owner enables it with `tg-recall config set ai_access.allow_sync true`")
         spec = args.get("chats", args.get("chat_id"))
         if spec in (None, "", []):
-            raise AgentQueryError("sync: chats is required (id, title, 'chat/topic' or t.me link)")
-        allowed = tuple(int(value) for value in policy.allowed_chat_ids)
-        chats, topics = resolve_targets(self.db, allowed, spec)
-        since = parse_when(args.get("since") or "30d", now=self._now())
+            chats, topics = self._tracked(), ()
+            if not chats:
+                raise AgentQueryError("sync: no chats to update; pass chats or set ai_access.allowed_chat_ids")
+        else:
+            chats, topics = resolve_targets(self.db, self._allowed(), spec)
+        since = parse_when(args.get("since"), now=self._now())
         decision = self._decide(AgentOperation.SYNC, chats, since, None, None)
         bounds = [datetime.fromisoformat(value) for value in (since, parse_when(decision.since, now=self._now())) if value]
         since_dt = max(bounds) if bounds else None
-        since = since_dt.isoformat() if since_dt else None
         targets: list[tuple[int, int | None]] = []
         for chat_id in decision.chat_ids:
             chat_topics: list[int | None] = [topic_id for topic_chat, topic_id in topics if topic_chat == chat_id]
             targets.extend((chat_id, topic_id) for topic_id in chat_topics or [None])
-        if len(targets) > 3:
-            raise AgentQueryError(f"sync: {len(targets)} targets; at most 3 per call")
+        seconds = float(args.get("max_seconds") or policy.sync_max_seconds)
+        media = str(args.get("media") or "none") if self.owner else "none"
         from .telegram_client import TelegramArchiveClient
 
-        seconds = max(5, int(policy.sync_max_seconds)) / len(targets)
-        client = TelegramArchiveClient(self.config, self.db)
+        results = asyncio.run(TelegramArchiveClient(self.config, self.db).sync_many(targets, since=since_dt, max_seconds=seconds, media=media))
         titles = chat_titles(self.db, decision.chat_ids)
+        topic_names = topic_titles(self.db, decision.chat_ids)
         lines: list[str] = []
-        partial = False
-        total = 0
-        for chat_id, topic_id in targets:
-            result = asyncio.run(client.sync_chat(chat_id, topic_id=topic_id, since=since_dt, max_seconds=seconds))
-            topic_names = topic_titles(self.db, decision.chat_ids)
+        for result in results:
+            chat_id, topic_id = result["chat_id"], result["topic_id"]
             name = titles.get(chat_id) or str(chat_id)
             if topic_id is not None:
                 name += f" /{topic_id} {topic_names.get(chat_id, {}).get(topic_id, '')}".rstrip()
             span = f"{_day(result['oldest_date'])} → {_day(result['newest_date'])}" if result["stored"] else "empty"
             state = "complete" if result["complete"] else (
-                f"Telegram rate limit until {result['retry_after']}" if result["retry_after"] else "partial (time limit) → call sync again"
+                f"Telegram rate limit until {result['retry_after']}" if result["retry_after"] else "partial (time limit) → sync again"
             )
-            partial = partial or not result["complete"]
-            total += result["fetched"]
-            lines.append(f"{name}: +{result['fetched']} fetched · {result['stored']} stored ({span}) · {state}")
-        refs = ", ".join(f"'{chat_id}/{topic_id}'" if topic_id is not None else str(chat_id) for chat_id, topic_id in targets)
-        lines.append(f"next: read(chats=[{refs}], since='{(since or '')[:10]}') or search(query, chats=…)")
-        header = f"sync since {(since or 'all')[:10]} · {total} msgs fetched" + (" · partial" if partial else "")
+            lines.append(f"{name}: +{result['fetched']} · {result['stored']} stored ({span}) · {state}")
+        skipped = len(targets) - len(results)
+        if skipped:
+            lines.append(f"{skipped} more chats not reached (rate limit) → sync again later")
+        total = sum(result["fetched"] for result in results)
+        partial = skipped or any(not result["complete"] for result in results)
+        header = f"sync · {total} new msgs · {len(results)} chats" + (" · partial" if partial else "")
         return ToolResult(_assemble(header, "\n".join(lines), []), total, decision.chat_ids)
 
     def search(self, args: dict[str, Any]) -> ToolResult:
+        return self._with_refresh_note(self._search(args))
+
+    def read(self, args: dict[str, Any]) -> ToolResult:
+        return self._with_refresh_note(self._read(args))
+
+    def _with_refresh_note(self, result: ToolResult) -> ToolResult:
+        if not self._refresh_note:
+            return result
+        return replace(result, text=f"{result.text}\n{self._refresh_note}")
+
+    def _search(self, args: dict[str, Any]) -> ToolResult:
         query = str(args.get("query", "")).strip()
         if not query:
             raise AgentQueryError("search: query is required")
@@ -152,7 +197,7 @@ class AgentTools:
         header = f"{len(kept)} hits · {chats} chats · tz {tz_label()} · archive synced {ago(archive_synced_at(self.db, scope.chat_ids), self._now())}"
         return ToolResult(_assemble(header, text, notes), len(kept), scope.chat_ids)
 
-    def read(self, args: dict[str, Any]) -> ToolResult:
+    def _read(self, args: dict[str, Any]) -> ToolResult:
         refs = args.get("refs") or []
         if isinstance(refs, str):
             refs = [refs]
@@ -288,10 +333,58 @@ class AgentTools:
 
     # ------------------------------------------------------------ helpers
 
+    def _allowed(self) -> tuple[int, ...]:
+        if self.owner:
+            with self.db.connect() as conn:
+                return tuple(row[0] for row in conn.execute("SELECT chat_id FROM chats ORDER BY chat_id"))
+        return allowed_chat_ids(self.config, self.db)
+
+    def _tracked(self) -> tuple[int, ...]:
+        """Chats `sync` updates by default: the allowlist, else every chat with messages."""
+
+        policy = self.config.ai_access
+        allowed = tuple(dict.fromkeys(int(value) for value in policy.allowed_chat_ids))
+        if not policy.allow_all_chats and (allowed or not self.owner):
+            return allowed
+        with self.db.connect() as conn:
+            return tuple(row[0] for row in conn.execute("SELECT DISTINCT chat_id FROM messages ORDER BY chat_id"))
+
+    def _auto_refresh(self, chat_ids: Sequence[int]) -> None:
+        """Pull new messages for stale chats before an agent reads them (allow_sync only)."""
+
+        policy = self.config.ai_access
+        minutes = int(policy.auto_refresh_minutes)
+        if self.owner or not policy.allow_sync or minutes <= 0 or not chat_ids:
+            return
+        cutoff = (self._now() - timedelta(minutes=minutes)).isoformat()
+        marks = ", ".join("?" for _ in chat_ids)
+        with self.db.connect() as conn:
+            stale = [
+                row[0]
+                for row in conn.execute(
+                    f"SELECT DISTINCT m.chat_id FROM messages m LEFT JOIN sync_state s ON s.chat_id = m.chat_id "
+                    f"WHERE m.chat_id IN ({marks}) AND (s.last_synced_at IS NULL OR s.last_synced_at < ?)",
+                    [*chat_ids, cutoff],
+                )
+            ]
+        if not stale:
+            return
+        from .telegram_client import TelegramArchiveClient
+
+        try:
+            results = asyncio.run(
+                TelegramArchiveClient(self.config, self.db).sync_many([(chat_id, None) for chat_id in stale[:AUTO_REFRESH_CHATS]], max_seconds=AUTO_REFRESH_SECONDS)
+            )
+            fetched = sum(result["fetched"] for result in results)
+            self._refresh_note = f"refreshed {len(results)} chats (+{fetched})"
+        except Exception as exc:
+            # Reading the archive as it is beats failing the call (busy session, rate limit, offline).
+            self._refresh_note = f"refresh skipped: {str(exc).split(';')[0][:80]}"
+
     def _scope(self, args: dict[str, Any], *, result_limit: int | None = None) -> tuple[Scope, PolicyDecision]:
         policy = self.config.ai_access
-        allowed = tuple(int(value) for value in policy.allowed_chat_ids)
-        if not policy.enabled or not allowed:
+        allowed = self._allowed()
+        if not self.owner and (not policy.enabled or not allowed):
             self._decide(AgentOperation.ARCHIVE_READ, allowed, None, None, None)
         chats, topics = resolve_targets(self.db, allowed, args.get("chats", args.get("chat_id")))
         since = parse_when(args.get("since"), now=self._now())
@@ -302,6 +395,7 @@ class AgentTools:
         if media is not None and media not in MEDIA_CHOICES:
             raise AgentQueryError(f"media must be one of {', '.join(MEDIA_CHOICES)}")
         decision = self._decide(AgentOperation.ARCHIVE_READ, chats, since, until, result_limit)
+        self._auto_refresh(decision.chat_ids)
         sender_ids, sender_name = resolve_sender(self.db, args.get("from"))
         allowed_media = _policy_media(decision.media_policy)
         scope = Scope(
@@ -317,6 +411,8 @@ class AgentTools:
         return scope, decision
 
     def _decide(self, operation: AgentOperation, chats: Sequence[int] | None, since: str | None, until: str | None, limit: int | None) -> PolicyDecision:
+        if self.owner:
+            return PolicyDecision(operation=operation, allowed=True, chat_ids=tuple(chats or ()), since=since, until=until, result_limit=limit)
         policy = self.config.ai_access
         requested = RequestedAgentScope(
             chat_ids=tuple(chats or ()), since=since, until=until, media_policy=None, result_limit=limit
@@ -325,7 +421,7 @@ class AgentTools:
             decision = require_agent_policy(
                 operation,
                 enabled=policy.enabled,
-                allowed_chat_ids=policy.allowed_chat_ids,
+                allowed_chat_ids=list(self._allowed()),
                 max_results=policy.max_results,
                 allowed_since=policy.allowed_since,
                 allowed_until=policy.allowed_until,

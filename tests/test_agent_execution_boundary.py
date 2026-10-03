@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -8,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from tg_recall.cli import main
-from tg_recall.config import AIAccessPolicy, AppConfig, TelegramConfig, save_config
+from tg_recall.config import AIAccessPolicy, AppConfig, save_config
 from tg_recall.mcp_server import ReadOnlyMCPServer
 from tg_recall.models import ChatRecord, MessageRecord
 from tg_recall.security import AgentOperation, AgentPolicyError, RequestedAgentScope, require_agent_policy
@@ -127,23 +126,6 @@ def test_policy_rejects_invalid_dates_and_restrictive_result_config() -> None:
     assert limit_error.value.error_code == "invalid_ai_access_limit"
 
 
-def test_agent_cli_caps_scoped_read_and_returns_stable_denial(tmp_path, monkeypatch, capsys) -> None:
-    cfg, _ = agent_archive(tmp_path)
-    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
-
-    assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat-id", "10", "--limit", "20"]) == 0
-    rows = json.loads(capsys.readouterr().out)
-    assert len(rows) == 1
-    assert rows[0]["message_id"] == 1
-
-    assert main(["--home", str(tmp_path / "home"), "--json", "config", "set", "llm.provider", "extractive"]) == 1
-    denied = json.loads(capsys.readouterr().out)
-    assert denied["error"]["code"] == "agent_operation_forbidden"
-
-    with cfg_path_audit(cfg) as rows:
-        assert any(row["event_type"] == "agent_policy_decision" for row in rows)
-
-
 def test_agent_export_cannot_escape_private_exports_directory(tmp_path, monkeypatch, capsys) -> None:
     _, _ = agent_archive(tmp_path)
     monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
@@ -168,131 +150,6 @@ def test_mcp_metadata_requires_enabled_access(tmp_path) -> None:
 
     assert response["result"]["isError"] is True
     assert "ai_access_disabled" in response["result"]["content"][0]["text"]
-
-
-def test_multi_media_policy_filters_cli_mcp_and_date_bounded_context(tmp_path, monkeypatch, capsys) -> None:
-    cfg, db = agent_archive(tmp_path)
-    cfg.ai_access.max_results = 10
-    cfg.ai_access.allowed_media_types = "voice,photo"
-    save_config(cfg, home=tmp_path / "home")
-    db.upsert_message(
-        MessageRecord(
-            chat_id=10,
-            message_id=3,
-            date=datetime(2026, 1, 3, tzinfo=UTC),
-            text="deadline voice",
-            has_media=True,
-            media_type="voice",
-        )
-    )
-    db.upsert_message(
-        MessageRecord(
-            chat_id=10,
-            message_id=4,
-            date=datetime(2026, 1, 4, tzinfo=UTC),
-            text="deadline document",
-            has_media=True,
-            media_type="document",
-        )
-    )
-    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
-    assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat-id", "10"]) == 0
-    cli_rows = json.loads(capsys.readouterr().out)
-    assert [row["message_id"] for row in cli_rows] == [3]
-
-    assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat-id", "10", "--semantic"]) == 0
-    semantic_rows = json.loads(capsys.readouterr().out)
-    assert [row["message_id"] for row in semantic_rows] == [3]
-
-    mcp_rows = ReadOnlyMCPServer(cfg, db).handle(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "search", "arguments": {"query": "deadline", "chat_id": 10, "context": 0}},
-        }
-    )
-    cited = mcp_rows["result"]["content"][0]["text"].split("cite: ", 1)[1].split()
-    # The MCP media policy hides disallowed media but keeps plain text; the date bound still applies.
-    assert sorted(cited) == ["tg://chat/10/message/1", "tg://chat/10/message/3"]
-
-    cfg.ai_access.allowed_media_types = "all"
-    cfg.ai_access.allowed_since = "2026-01-01"
-    context = ReadOnlyMCPServer(cfg, db).handle(
-        {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {"name": "read", "arguments": {"refs": ["10/3"], "before": 2, "after": 0}},
-        }
-    )
-    window = context["result"]["content"][0]["text"]
-    assert ">3 " in window and "\n 1 " in window
-    assert "old deadline" not in window
-
-
-def test_successful_noop_sync_preserves_watermarks_and_clears_expired_retry(tmp_path, monkeypatch) -> None:
-    cfg = AppConfig(telegram=TelegramConfig(api_id=1, api_hash="hash"))
-    db = Database(tmp_path / "archive.sqlite3")
-    db.migrate()
-    db.create_scope("work", [10], None, None)
-    db.update_sync_state(10, newest_message_id=50, oldest_message_id=10, retry_after="2026-01-02T00:00:00+00:00")
-    client = TelegramArchiveClient(cfg, db)
-
-    class EmptyClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def iter_messages(self, chat_id, limit=100, **kwargs):
-            if False:
-                yield None
-
-    monkeypatch.setattr(client, "_client", lambda: EmptyClient())
-    asyncio.run(client.sync_scope("work"))
-
-    state = db.get_sync_state(10)
-    assert state is not None
-    assert state["newest_message_id"] == 50
-    assert state["oldest_message_id"] == 10
-    assert state["retry_after"] is None
-
-
-def test_bounded_and_interrupted_sync_do_not_move_watermarks_the_wrong_way(tmp_path, monkeypatch) -> None:
-    cfg = AppConfig(telegram=TelegramConfig(api_id=1, api_hash="hash"))
-    db = Database(tmp_path / "archive.sqlite3")
-    db.migrate()
-    db.create_scope("bounded", [10], "2026-02-01", None)
-    db.update_sync_state(10, newest_message_id=50, oldest_message_id=10)
-    client = TelegramArchiveClient(cfg, db)
-
-    class BoundedClient:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def iter_messages(self, chat_id, limit=100, **kwargs):
-            yield _telegram_message(60, datetime(2026, 1, 1, tzinfo=UTC))
-
-    monkeypatch.setattr(client, "_client", lambda: BoundedClient())
-    asyncio.run(client.sync_scope("bounded"))
-    assert db.get_sync_state(10)["newest_message_id"] == 50
-    assert db.get_sync_state(10)["oldest_message_id"] == 10
-
-    class InterruptedClient(BoundedClient):
-        async def iter_messages(self, chat_id, limit=100, **kwargs):
-            yield _telegram_message(70, datetime(2026, 2, 2, tzinfo=UTC))
-            raise RuntimeError("connection interrupted")
-
-    monkeypatch.setattr(client, "_client", lambda: InterruptedClient())
-    with pytest.raises(RuntimeError, match="interrupted"):
-        asyncio.run(client.sync_scope("bounded"))
-    assert db.get_sync_state(10)["newest_message_id"] == 50
-    assert db.get_sync_state(10)["oldest_message_id"] == 10
 
 
 def _telegram_message(message_id: int, value: datetime) -> SimpleNamespace:
@@ -327,39 +184,105 @@ class cfg_path_audit:
         return False
 
 
+def test_agent_cli_caps_scoped_read_and_returns_stable_denial(tmp_path, monkeypatch, capsys) -> None:
+    cfg, _ = agent_archive(tmp_path)
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
+
+    assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat", "10", "--limit", "20"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 1  # max_results=1
+    assert ">1 " in payload["text"] and "old deadline" not in payload["text"]  # allowed_since bound
+
+    assert main(["--home", str(tmp_path / "home"), "--json", "config", "set", "ai_access.enabled", "false"]) == 1
+    denied = json.loads(capsys.readouterr().out)
+    assert denied["error"]["code"] == "agent_operation_forbidden"
+
+    with cfg_path_audit(cfg) as rows:
+        assert any(row["event_type"] == "agent_policy_decision" for row in rows)
+
+
+def test_media_policy_is_the_same_for_cli_and_mcp_and_dates_bound_context(tmp_path, monkeypatch, capsys) -> None:
+    cfg, db = agent_archive(tmp_path)
+    cfg.ai_access.max_results = 10
+    cfg.ai_access.allowed_media_types = "voice,photo"
+    save_config(cfg, home=tmp_path / "home")
+    for message_id, media in ((3, "voice"), (4, "document")):
+        db.upsert_message(
+            MessageRecord(chat_id=10, message_id=message_id, date=datetime(2026, 1, message_id, tzinfo=UTC), text=f"deadline {media}", has_media=True, media_type=media)
+        )
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
+    assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--chat", "10", "--context", "0"]) == 0
+    cli_cites = json.loads(capsys.readouterr().out)["text"].split("cite: ", 1)[1].split()[:2]
+
+    mcp_rows = ReadOnlyMCPServer(cfg, db).handle(
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "search", "arguments": {"query": "deadline", "chat_id": 10, "context": 0}}}
+    )
+    mcp_cites = mcp_rows["result"]["content"][0]["text"].split("cite: ", 1)[1].split()
+    # Disallowed media is hidden, plain text stays, the date bound still applies.
+    assert sorted(cli_cites) == sorted(mcp_cites) == ["tg://chat/10/message/1", "tg://chat/10/message/3"]
+
+    cfg.ai_access.allowed_media_types = "all"
+    context = ReadOnlyMCPServer(cfg, db).handle(
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "read", "arguments": {"refs": ["10/3"], "before": 2, "after": 0}}}
+    )
+    window = context["result"]["content"][0]["text"]
+    assert ">3 " in window and "\n 1 " in window
+    assert "old deadline" not in window
+
+
 def test_claude_code_shell_cannot_read_or_reconfigure_outside_allowlist(tmp_path, monkeypatch, capsys) -> None:
     agent_archive(tmp_path)
     monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
     monkeypatch.setenv("CLAUDECODE", "1")
     home = ["--home", str(tmp_path / "home"), "--json"]
 
-    assert main([*home, "search", "deadline", "--chat-id", "11"]) == 1
+    assert main([*home, "search", "deadline", "--chat", "11"]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "chat_not_allowed"
 
     assert main([*home, "config", "set", "ai_access.allowed_chat_ids", "10,11"]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "agent_operation_forbidden"
 
 
-def test_sync_chat_cli_resolves_links_and_respects_the_allowlist_for_agents(tmp_path, monkeypatch, capsys) -> None:
-    _, db = agent_archive(tmp_path)
+def test_allow_all_chats_opens_every_archived_chat_but_keeps_policy_dates(tmp_path, monkeypatch, capsys) -> None:
+    cfg, db = agent_archive(tmp_path)
+    cfg.ai_access.allowed_chat_ids = []
+    cfg.ai_access.allow_all_chats = True
+    cfg.ai_access.max_results = 10
+    save_config(cfg, home=tmp_path / "home")
+    db.upsert_message(MessageRecord(chat_id=11, message_id=5, date=datetime(2026, 1, 5, tzinfo=UTC), text="hidden deadline"))
+    monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
+
+    assert main(["--home", str(tmp_path / "home"), "--json", "search", "deadline", "--limit", "10"]) == 0
+    text = json.loads(capsys.readouterr().out)["text"]
+    assert "hidden deadline" in text and "old deadline" not in text
+
+
+def test_agent_sync_needs_allow_sync_then_resolves_links_within_the_allowlist(tmp_path, monkeypatch, capsys) -> None:
+    cfg, db = agent_archive(tmp_path)
     db.upsert_chat(ChatRecord(chat_id=10, title="Allowed", chat_type="supergroup", username="AllowedGroup"))
     db.upsert_forum_topics(10, [(1, "General"), (157, "Русский")])
     calls = []
 
-    async def fake_sync(self, chat_id, *, topic_id=None, since=None, max_seconds=60.0, max_messages=100_000):
+    async def fake_sync_many(self, targets, *, since=None, max_seconds=60.0, max_messages=100_000, media="none"):
         assert since is None or since.tzinfo is not None
-        calls.append((chat_id, topic_id, since.astimezone().date().isoformat() if since else None))
-        return {"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 3, "complete": True,
-                "retry_after": None, "stored": 3, "oldest_date": None, "newest_date": None}
+        calls.append((targets, since.astimezone().date().isoformat() if since else None, media))
+        return [{"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 3, "complete": True,
+                 "retry_after": None, "stored": 3, "oldest_date": None, "newest_date": None} for chat_id, topic_id in targets]
 
-    monkeypatch.setattr(TelegramArchiveClient, "sync_chat", fake_sync)
+    monkeypatch.setattr(TelegramArchiveClient, "sync_many", fake_sync_many)
     monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
     monkeypatch.setenv("CLAUDECODE", "1")
     home = ["--home", str(tmp_path / "home"), "--json"]
 
-    assert main([*home, "sync", "chat", "https://t.me/AllowedGroup/157", "--since", "2025-06-01"]) == 0
+    assert main([*home, "sync", "https://t.me/AllowedGroup/157"]) == 1
+    assert "allow_sync" in json.loads(capsys.readouterr().out)["error"]["message"]
+
+    cfg.ai_access.allow_sync = True
+    save_config(cfg, home=tmp_path / "home")
+    assert main([*home, "sync", "https://t.me/AllowedGroup/157", "--since", "2025-06-01", "--media", "all"]) == 0
     out = capsys.readouterr().out
     assert "\n" not in out.strip()  # compact JSON for agents
-    assert calls == [(10, 157, "2026-01-01")]  # policy allowed_since wins over an earlier request
-    assert main([*home, "sync", "chat", "11"]) == 1
+    # policy allowed_since wins over an earlier request; agents cannot queue media downloads
+    assert calls == [([(10, 157)], "2026-01-01", "none")]
+    assert main([*home, "sync", "11"]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "chat_not_allowed"

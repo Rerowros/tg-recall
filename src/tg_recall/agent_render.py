@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Iterable, Sequence
 
 from .agent_query import AgentMessage, ChatInfo
-from .context_budgeting import estimate_text_tokens
+from .tokens import estimate_text_tokens
 
 HIT_CHARS = 600
 CONTEXT_CHARS = 200
@@ -106,10 +106,11 @@ def _show_reply(message: AgentMessage, shown: set[int], targets: Counter[int]) -
     return message.hit and targets[message.reply_to] < 3
 
 
-def render_chat_list(chats: Sequence[ChatInfo], now: datetime | None = None) -> str:
+def render_chat_list(chats: Sequence[ChatInfo], now: datetime | None = None, *, owner: bool = False) -> str:
+    noun = "chats" if owner else "allowed chats"
     if not chats:
-        return "0 allowed chats match"
-    lines = [f"{len(chats)} allowed chats · id · title · type · msgs · last message · synced"]
+        return f"0 {noun} match"
+    lines = [f"{len(chats)} {noun} · id · title · type · msgs · last message · synced"]
     for chat in chats:
         last = _local(chat.last_date).strftime("%Y-%m-%d") if chat.last_date else "-"
         lines.append(

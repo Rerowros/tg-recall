@@ -16,7 +16,7 @@ def test_ci_marker_is_automation_shell(monkeypatch) -> None:
 def test_ai_archive_read_disabled_by_default(monkeypatch) -> None:
     monkeypatch.setenv("TG_RECALL_AI_MODE", "1")
 
-    with pytest.raises(PermissionError, match="disabled"):
+    with pytest.raises(PermissionError, match="AI access is off"):
         enforce_ai_archive_read(
             enabled=False,
             allowed_chat_ids=[],

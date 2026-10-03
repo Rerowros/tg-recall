@@ -45,7 +45,6 @@ def create_backup(
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("manifest.json", json.dumps(manifest, indent=2))
             archive.write(db_copy, "profile/archive.sqlite3")
-            _write_tree(archive, Path(config.wiki_dir), "profile/wiki")
             if profile_config.exists():
                 archive.write(profile_config, f"config/profiles/{profile_config.name}")
             if mode == "full":
@@ -98,7 +97,6 @@ def restore_backup(
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as input_file, target.open("wb") as output_file:
                     shutil.copyfileobj(input_file, output_file)
-        _extract_prefix(archive, "profile/wiki/", paths.wiki_dir)
         _extract_prefix(archive, "profile/objects/", paths.media_dir)
     for target in (paths.profile_data_dir, paths.db_path, paths.session_path, paths.profile_config_path, paths.credentials_path):
         if target.exists():
