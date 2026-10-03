@@ -9,7 +9,7 @@ import tg_recall.cli as cli
 from tg_recall.assistant import ArchiveAssistant
 from tg_recall.cli import main
 from tg_recall.config import AppConfig, save_config
-from tg_recall.context_budgeting import ConservativeUtf8JsonTokenCounter, canonical_json_bytes
+from tg_recall.context_budgeting import CharClassTokenCounter, canonical_json_bytes
 from tg_recall.hybrid_retrieval import EmbeddingModelMetadata, RetrievalMode, SemanticUnavailableError
 from tg_recall.mcp_server import ReadOnlyMCPServer
 from tg_recall.models import ChatRecord, MessageRecord, SearchFilters
@@ -86,9 +86,9 @@ def test_hybrid_payload_budget_counts_exact_utf8_json_with_multibyte_context(tmp
         "дедлайн", filters=SearchFilters(chat_id=10), limit=1, token_budget=400, mode=RetrievalMode.AUTO
     )
     payload = result.as_json()
-    exact = ConservativeUtf8JsonTokenCounter().count(canonical_json_bytes({"evidence": payload["evidence"]}))
+    exact = CharClassTokenCounter().count(canonical_json_bytes({"evidence": payload["evidence"]}))
 
-    assert payload["accounting"]["counter"] == "utf8-json-conservative"
+    assert payload["accounting"]["counter"] == "charclass"
     assert payload["accounting"]["estimated_tokens"] == exact
     assert exact <= payload["accounting"]["usable_payload_budget"]
     assert payload["truncated"] is True
@@ -110,14 +110,11 @@ def test_cli_and_read_only_mcp_expose_machine_retrieval_provenance(tmp_path, cap
     cfg.ai_access.allowed_chat_ids = [10]
     cfg.ai_access.max_results = 2
     server = ReadOnlyMCPServer(cfg, db)
-    assert "retrieve_evidence" in {tool["name"] for tool in server.tools()}
     response = server.handle({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": "retrieve_evidence", "arguments": {"query": "alpha", "chat_id": 10, "mode": "auto", "token_budget": 1000}},
+        "params": {"name": "search", "arguments": {"query": "alpha", "chats": 10, "budget": 1000}},
     })
-    payload = json.loads(response["result"]["content"][0]["text"])
-    assert payload["mode"] == "keyword"
-    assert payload["evidence"][0]["citation"] == "tg://chat/10/message/1"
+    assert "tg://chat/10/message/1" in response["result"]["content"][0]["text"]
     denied = server.handle({
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
         "params": {"name": "index_embeddings_build", "arguments": {"chat_id": 10}},

@@ -5,6 +5,14 @@
 ## Unreleased
 
 - Make `tg-recall-mcp` exit on stdin EOF, supervising parent death, unused timeout (`TG_RECALL_MCP_UNUSED_TIMEOUT_SEC`, default `600`), or idle timeout (`TG_RECALL_MCP_IDLE_TIMEOUT_SEC`, default `1800`). Set a timeout to `0` to disable it; set `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping.
+- Replace the MCP tools with `search`, `read` and `chats`: compact text, one line per message, sized to a token budget, with `tg://` citations. `read()` with no arguments returns what is new since this client's last read (first call: last 24h), a fair share per chat. The old `list_allowed_chats`, `list_scopes`, `search_messages`, `get_message_context`, `ask_archive` and `retrieve_evidence` tools are removed; research-session tools are exposed only with `ai_access.mcp_research_tools=true`.
+- MCP rejects unknown arguments with a did-you-mean hint, accepts `chat_id` as an alias of `chats`, and picks up config edits without a restart.
+- Select forum topics by t.me link (`t.me/<username>/<topic>`, `t.me/c/<id>/<topic>`) or `<chat>/<topic>`; `chats()` lists topics. Topics are stored per message with their titles.
+- Add `ai_access` keys `max_read_messages` (`200`), `mcp_research_tools`, `instructions_list_chats`, `allow_sync` (all `false`) and `sync_max_seconds` (`50`); `max_results` now defaults to `20`.
+- Add an optional MCP `sync` tool (only with `ai_access.allow_sync=true`): downloads up to 3 allowed chats or topics since a date (default `30d`) into the local archive, reads Telegram only, time-boxed and resumable.
+- Add `tg-recall sync chat <target> [--since 30d] [--max-seconds 3600]`: fills one chat or forum topic from a date to now in one interruption-safe run without the 1000-message cap; a topic is fetched alone instead of the whole group. Writes are batched per page; a lock file makes a second process on the same Telegram session fail with `busy`.
+- Store forwards as a short origin label; `telegram check` records the owner's id so agent output shows the owner as `я`.
+- `--json` output is compact (no indentation) when run by an AI agent.
 
 ## v0.6.0 - 2026-08-04
 

@@ -133,7 +133,7 @@ def test_mcp_catalog_session_and_expansion_are_read_only_and_scope_checked(tmp_p
         "--purpose", "Verify payment deadline", "--summary", "Known cited payment evidence.",
         "--evidence-set", "payment-set", "--at", "2026-01-04T00:00:00Z",
     ]) == 0
-    cfg.ai_access = AIAccessPolicy(enabled=True, allowed_chat_ids=[10], max_results=3)
+    cfg.ai_access = AIAccessPolicy(enabled=True, allowed_chat_ids=[10], max_results=3, mcp_research_tools=True)
     server = ReadOnlyMCPServer(cfg, db)
     names = {tool["name"] for tool in server.tools()}
     assert {"query_knowledge_catalog", "inspect_research_session", "expand_cited_sources"} <= names
@@ -162,6 +162,7 @@ def test_mcp_catalog_and_session_reject_date_or_media_policy_narrowing(tmp_path,
         allowed_chat_ids=[10],
         max_results=3,
         allowed_since="2026-01-03",
+        mcp_research_tools=True,
     )
     server = ReadOnlyMCPServer(cfg, db)
 
@@ -173,10 +174,6 @@ def test_mcp_catalog_and_session_reject_date_or_media_policy_narrowing(tmp_path,
             "name": name, "arguments": arguments,
         }})
         assert denied["error"]["data"]["code"] == "knowledge_scope_narrowed"
-    listed = server.handle({"jsonrpc": "2.0", "id": 20, "method": "tools/call", "params": {
-        "name": "list_scopes", "arguments": {},
-    }})
-    assert json.loads(listed["result"]["content"][0]["text"]) == []
 
     cfg.ai_access.allowed_since = None
     db.create_scope("voice-scope", [10], "2026-01-01", None, "voice", "off")
