@@ -17,7 +17,7 @@ Use synthetic fixtures in `tests/fixtures/`; never add exported chats, real medi
 
 ## Changes
 
-- Keep the CLI and MCP on one code path: `search`, `read`, `chats` and `sync` in both go through `AgentTools`.
+- Keep the CLI and MCP on one code path: `search`, `read`, `stats`, `export`, `chats` and `sync` in both go through `AgentTools`.
 - Preserve `tg://chat/<chat_id>/message/<message_id>` citations for archive evidence.
 - Add focused tests for changed behavior.
 - Update the English and Russian docs together; tests check that commands, code identifiers, links and headings match.

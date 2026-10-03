@@ -1,4 +1,4 @@
-"""The agent-facing archive tools (search / read / chats) behind MCP.
+"""The agent-facing archive tools behind MCP and the CLI.
 
 Each call resolves the AI access policy first, then queries only the
 permitted chats and returns compact text sized to a token budget.
@@ -7,17 +7,21 @@ permitted chats and returns compact text sized to a token budget.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .agent_query import (
     AgentMessage,
     AgentQueryError,
     Scope,
+    archive_stats,
     archive_synced_at,
     chat_titles,
     context_window,
+    conversation_messages,
     count_messages,
     fetch_messages,
     list_chats,
@@ -32,16 +36,37 @@ from .agent_query import (
     self_user_id,
     topic_titles,
 )
-from .agent_render import RenderContext, ago, citations_line, render_chat_list, render_messages, token_estimate, tz_label
+from .agent_render import (
+    RenderContext,
+    ago,
+    citations_line,
+    render_chat_list,
+    render_messages,
+    render_stats,
+    token_estimate,
+    tz_label,
+)
 from .config import AppConfig
-from .security import AgentOperation, AgentPolicyError, PolicyDecision, RequestedAgentScope, audit_policy_decision, require_agent_policy
+from .security import (
+    AgentOperation,
+    AgentPolicyError,
+    PolicyDecision,
+    RequestedAgentScope,
+    audit_policy_decision,
+    harden_path,
+    require_agent_policy,
+)
 from .storage import Database
+from .sync_jobs import SyncJob, SyncJobs
 
 MEDIA_CHOICES = ("voice", "audio", "photo", "video", "document", "any")
 MAX_BUDGET = 20000
 AUTO_REFRESH_SECONDS = 8.0
 AUTO_REFRESH_CHATS = 10
 NEW_WINDOW = timedelta(hours=24)
+OWNER_EXPORT_CAP = 2_000_000
+MAX_TRANSCRIBE_REFS = 5
+SPOKEN_MEDIA = ("voice", "audio", "video")
 
 
 @dataclass(frozen=True)
@@ -78,12 +103,15 @@ class AgentTools:
         owner: bool = False,
         now: Callable[[], datetime] | None = None,
         progress: Callable[[str], None] | None = None,
+        jobs: SyncJobs | None = None,
     ):
         self.config = config
         self.progress = progress
         self.db = db
         self.client = client
         self.owner = owner
+        # The MCP server passes its process-wide jobs: a long sync then runs in the background.
+        self.jobs = jobs
         self._now = now or (lambda: datetime.now(UTC))
         self._refresh_note: str | None = None
 
@@ -108,6 +136,12 @@ class AgentTools:
         if not self.owner and not policy.allow_sync:
             raise AgentQueryError("sync is off; the owner enables it with `tg-recall config set ai_access.allow_sync true`")
         spec = args.get("chats", args.get("chat_id"))
+        job = self.jobs.current() if self.jobs is not None else None
+        if job is not None and (job.running or not job.reported or job.recent):
+            if spec in (None, "", []) and not args.get("since"):
+                return self._job_report(job)  # a bare sync() is a status check while a download is fresh
+            if job.running:
+                return replace(self._job_report(job), text=self._job_report(job).text + "\none download at a time → call sync() for status, then sync again")
         if spec in (None, "", []):
             chats, topics = self._tracked(), ()
             if not chats:
@@ -122,22 +156,38 @@ class AgentTools:
         for chat_id in decision.chat_ids:
             chat_topics: list[int | None] = [topic_id for topic_chat, topic_id in topics if topic_chat == chat_id]
             targets.extend((chat_id, topic_id) for topic_id in chat_topics or [None])
-        seconds = float(args.get("max_seconds") or policy.sync_max_seconds)
         media = str(args.get("media") or "none") if self.owner else "none"
+        if self.jobs is not None:
+            from .telegram_client import ensure_sync_allowed
+
+            ensure_sync_allowed(self.db, targets)
+            job = self.jobs.start(self.config, self.db, targets, since=since_dt, seconds=float(policy.sync_background_minutes) * 60)
+            job.done.wait(max(0.0, float(args.get("max_seconds") or policy.sync_max_seconds)))
+            return self._job_report(job)
+        seconds = float(args.get("max_seconds") or policy.sync_max_seconds)
         from .telegram_client import TelegramArchiveClient
 
         titles = chat_titles(self.db, decision.chat_ids)
-        topic_names = topic_titles(self.db, decision.chat_ids)
 
         def report(state: dict[str, Any]) -> None:
-            if self.progress is not None:
-                name = titles.get(state["chat_id"]) or str(state["chat_id"])
-                if state["topic_id"] is not None:
-                    name += f" /{state['topic_id']}"
+            if self.progress is None:
+                return
+            name = titles.get(state["chat_id"]) or str(state["chat_id"])
+            if state["topic_id"] is not None:
+                name += f" /{state['topic_id']}"
+            if state["date"] is None:
+                total = f" (~{state['total']} msgs on Telegram)" if state.get("total") else ""
+                self.progress(f"sync {name}: starting{total}")
+            else:
                 self.progress(f"sync {name}: {state['fetched']} msgs so far, at {_day(state['date'].isoformat())}")
 
         client = TelegramArchiveClient(self.config, self.db)
         results = asyncio.run(client.sync_many(targets, since=since_dt, max_seconds=seconds, media=media, progress=report))
+        return self._sync_summary(results, len(targets), decision.chat_ids)
+
+    def _sync_summary(self, results: Sequence[dict[str, Any]], targets: int, chat_ids: Sequence[int]) -> ToolResult:
+        titles = chat_titles(self.db, chat_ids)
+        topic_names = topic_titles(self.db, chat_ids)
         lines: list[str] = []
         for result in results:
             chat_id, topic_id = result["chat_id"], result["topic_id"]
@@ -149,13 +199,56 @@ class AgentTools:
                 f"Telegram rate limit until {result['retry_after']}" if result["retry_after"] else "partial (time limit) → sync again"
             )
             lines.append(f"{name}: +{result['fetched']} · {result['stored']} stored ({span}) · {state}")
-        skipped = len(targets) - len(results)
+        skipped = targets - len(results)
         if skipped:
             lines.append(f"{skipped} more chats not reached (rate limit) → sync again later")
         total = sum(result["fetched"] for result in results)
         partial = skipped or any(not result["complete"] for result in results)
         header = f"sync · {total} new msgs · {len(results)} chats" + (" · partial" if partial else "")
-        return ToolResult(_assemble(header, "\n".join(lines), []), total, decision.chat_ids)
+        return ToolResult(_assemble(header, "\n".join(lines), []), total, tuple(chat_ids))
+
+    def _job_report(self, job: SyncJob) -> ToolResult:
+        chat_ids = tuple(dict.fromkeys(chat_id for chat_id, _ in job.targets))
+        if job.running:
+            body = self._job_progress(job)
+            text = _assemble(
+                f"sync running in background · {int(job.elapsed())}s so far",
+                body,
+                ["search/read already see what is stored; call sync() for status (no need to wait idle)"],
+            )
+            return ToolResult(text, 0, chat_ids)
+        again = job.reported
+        job.reported = True
+        if job.error:
+            raise AgentQueryError(job.error)
+        summary = self._sync_summary(job.results or [], len(job.targets), chat_ids)
+        if again and job.finished is not None:
+            ago_seconds = int(time.monotonic() - job.finished)
+            summary = replace(summary, text=summary.text.replace("sync · ", f"sync (finished {ago_seconds}s ago) · ", 1))
+        return summary
+
+    def _job_progress(self, job: SyncJob) -> str:
+        titles = chat_titles(self.db, [chat_id for chat_id, _ in job.targets])
+        lines = []
+        for key in job.targets:
+            state = job.progress.get(key)
+            chat_id, topic_id = key
+            name = (titles.get(chat_id) or str(chat_id)) + (f" /{topic_id}" if topic_id is not None else "")
+            if state is None:
+                lines.append(f"{name}: waiting")
+                continue
+            total = f" of ~{state['total']} on Telegram" if state.get("total") else ""
+            at = f", at {_day(_iso(state['date']))}" if state.get("date") else ""
+            eta = job.eta_seconds(key)
+            left = f", ~{_duration(eta)} left" if eta else ""
+            lines.append(f"{name}: {state.get('fetched', 0)} msgs{total}{at}{left}")
+        return "\n".join(lines)
+
+    def _job_note(self) -> str | None:
+        job = self.jobs.running() if self.jobs is not None else None
+        if job is None:
+            return None
+        return "sync running in background: " + self._job_progress(job).replace("\n", "; ")
 
     def search(self, args: dict[str, Any]) -> ToolResult:
         return self._with_refresh_note(self._search(args))
@@ -163,10 +256,153 @@ class AgentTools:
     def read(self, args: dict[str, Any]) -> ToolResult:
         return self._with_refresh_note(self._read(args))
 
+    def stats(self, args: dict[str, Any]) -> ToolResult:
+        """Counts instead of messages: volume per day/week/month, query hits, senders, topics."""
+
+        unit = args.get("by")
+        if unit is not None and unit not in ("day", "week", "month"):
+            raise AgentQueryError("by must be day, week or month")
+        query = str(args.get("query") or "").strip() or None
+        scope, _ = self._scope(args)
+        found = archive_stats(self.db, scope, query=query, unit=unit)
+        if not found.total:
+            return self._with_refresh_note(ToolResult(self._no_hits(scope).replace("0 hits", "0 msgs", 1), 0, scope.chat_ids))
+        body = render_stats(found, chat_titles(self.db, scope.chat_ids), topic_titles(self.db, scope.chat_ids), query)
+        hits = f" · {found.hits} hits for {query!r}" if query else ""
+        header = f"stats · {found.total} msgs{hits} · {len(found.chats)} chats · {_day(found.first)} → {_day(found.last)} · tz {tz_label()}"
+        notes = ["→ read(chats, since, until) or search(query, since, until) for the messages behind a number"]
+        return self._with_refresh_note(ToolResult(_assemble(header, body, notes), found.total, scope.chat_ids))
+
+    def export(self, args: dict[str, Any]) -> ToolResult:
+        """Write a period/topic to one text file for bulk reading with the agent's own file tools.
+
+        Same one-line-per-message format as read, untruncated, grouped per
+        chat and forum topic. Only allowed chats, policy dates and media.
+        """
+
+        cap = OWNER_EXPORT_CAP if self.owner else int(self.config.ai_access.max_export_messages)
+        if cap <= 0:
+            raise AgentQueryError("export is off; the owner enables it with `tg-recall config set ai_access.max_export_messages 50000`")
+        scope, _ = self._scope(args)
+        rows = conversation_messages(self.db, scope, limit=cap + 1)
+        truncated = len(rows) > cap
+        rows = rows[:cap]
+        if not rows:
+            return self._with_refresh_note(ToolResult(self._no_hits(scope).replace("0 hits", "0 msgs", 1), 0, scope.chat_ids))
+        ctx = replace(self._render_context(scope.chat_ids, full=True), dated=True)
+        groups: dict[int, list[AgentMessage | None]] = {}
+        for row in rows:
+            groups.setdefault(row.chat_id, []).append(row)
+        body = render_messages(list(groups.items()), ctx)
+        dates = sorted(row.date for row in rows)
+        legend = (
+            f"# tg-recall export · {len(rows)} msgs · {len(groups)} chats · {_day(dates[0])} → {_day(dates[-1])} · tz {tz_label()}\n"
+            "# one line per message: <id> YYYY-MM-DD HH:MM sender [↩reply-to] [fwd:origin]: text · '## chat (id)' and '# topic (/id)' are headers"
+            " · cite tg://chat/<chat id>/message/<id>\n"
+        )
+        content = legend + body + "\n"
+        # Only the owner picks a path; agent exports stay in the profile's private exports directory.
+        target = Path(args["output"]).expanduser() if self.owner and args.get("output") else self._export_path(groups, scope)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        harden_path(target, is_dir=False)
+        lines = content.count("\n")
+        notes = [f"read it with your file tools in chunks (~{max(1, lines // max(1, token_estimate(content) // 20000 + 1))} lines ≈ 20k tok each)"]
+        if truncated:
+            notes.append(f"stopped at {cap} msgs (ai_access.max_export_messages) → narrow since/until or chats for the rest")
+        header = f"export · {len(rows)} msgs · {len(groups)} chats · {_day(dates[0])} → {_day(dates[-1])} · {lines} lines · ~{token_estimate(content)} tok in file"
+        text = f"{header}\nfile: {target}\n" + "\n".join(notes)
+        return self._with_refresh_note(ToolResult(text, len(rows), scope.chat_ids))
+
+    def _export_path(self, groups: dict[int, Any], scope: Scope) -> Path:
+        if len(groups) == 1:
+            chat_id = next(iter(groups))
+            topics = [topic_id for chat, topic_id in scope.topics if chat == chat_id]
+            name = f"chat{chat_id}" + (f"-topic{topics[0]}" if len(topics) == 1 else "")
+        else:
+            name = f"{len(groups)}chats"
+        stamp = self._now().astimezone().strftime("%Y%m%d-%H%M%S")
+        return Path(self.config.exports_dir).expanduser() / f"tg-{name}-{stamp}.txt"
+
+    def transcribe(self, args: dict[str, Any]) -> ToolResult:
+        """Download cited voice/audio/video from Telegram and transcribe it locally (or via Telegram)."""
+
+        if not self.owner and not self.config.ai_access.allow_transcribe:
+            raise AgentQueryError("transcribe is off; the owner enables it with `tg-recall config set ai_access.allow_transcribe true`")
+        refs = args.get("refs") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        if not refs or len(refs) > MAX_TRANSCRIBE_REFS:
+            raise AgentQueryError(f"transcribe: pass 1-{MAX_TRANSCRIBE_REFS} refs (tg://chat/<id>/message/<id>)")
+        parsed = [parse_ref(ref) for ref in refs]
+        scope, _ = self._scope({"chats": list(dict.fromkeys(chat_id for chat_id, _ in parsed))})
+        found = fetch_messages(self.db, scope, parsed)
+        notes: list[str] = []
+        missing = [f"{chat_id}/{message_id}" for chat_id, message_id in parsed if (chat_id, message_id) not in found]
+        if missing:
+            notes.append(f"not found or outside the allowed scope: {', '.join(missing)}")
+        spoken = [message for message in found.values() if message.media_type in SPOKEN_MEDIA]
+        other = [f"{message.chat_id}/{message.message_id}" for message in found.values() if message.media_type not in SPOKEN_MEDIA]
+        if other:
+            notes.append(f"no voice/audio/video: {', '.join(other)}")
+        todo = [message for message in spoken if not message.transcript]
+        if todo:
+            notes.extend(self._transcribe_media(todo))
+        fresh = fetch_messages(self.db, scope, [(message.chat_id, message.message_id) for message in spoken])
+        rows = [fresh[key] for key in parsed if key in fresh]
+        done = sum(1 for row in rows if row.transcript)
+        body = render_messages([(chat_id, [row for row in rows if row.chat_id == chat_id]) for chat_id in dict.fromkeys(row.chat_id for row in rows)], self._render_context(scope.chat_ids, full=True)) if rows else ""
+        header = f"transcribe · {done}/{len(rows)} transcribed · tz {tz_label()}"
+        return ToolResult(_assemble(header, body, notes), done, scope.chat_ids)
+
+    def _transcribe_media(self, messages: Sequence[AgentMessage]) -> list[str]:
+        from .media import MediaStore
+        from .telegram_client import TelegramArchiveClient
+        from .transcription import TranscriptionService, local_transcription_provider
+
+        media_ids: set[int] = set()
+        for message in messages:
+            media = self.db.media_for_message(message.chat_id, message.message_id)
+            if not media:
+                media_ids.add(self.db.enqueue_media(message.chat_id, message.message_id, message.media_type or "media", str(message.message_id), "off"))
+                continue
+            for item in media:
+                media_ids.add(item.id)
+                if item.status != "downloaded":
+                    self.db.requeue_media_download(item.id, transcription_policy="off")
+        client = TelegramArchiveClient(self.config, self.db)
+        notes: list[str] = []
+        try:
+            asyncio.run(client.download_pending_media(limit=len(media_ids), media_ids=media_ids))
+        except Exception as exc:
+            return [f"download failed: {str(exc).split(';')[0][:120]}"]
+        for media_id in media_ids:
+            self.db.enqueue_transcription(media_id)
+        store = MediaStore(self.config.media_dir, Path(self.config.cache_dir) / "downloads")
+        try:
+            provider = local_transcription_provider(self.config)
+        except Exception:
+            provider = None
+        if provider is not None and provider.available():
+            service = TranscriptionService(self.db, fallback_provider=provider, media_store=store, cache_dir=Path(self.config.cache_dir) / "extracted-audio")
+            result = service.run_pending(limit=len(media_ids), media_ids=media_ids)
+            if result["failed"]:
+                notes.append(f"{result['failed']} failed locally ({self.config.transcription.backend})")
+        else:
+            # No local speech-to-text: Telegram's own transcription (needs Telegram Premium).
+            try:
+                result = asyncio.run(client.transcribe_pending_with_telegram(limit=len(media_ids), media_ids=media_ids))
+            except Exception as exc:
+                return [f"no local speech-to-text and Telegram transcription failed: {str(exc).split(';')[0][:120]}; the owner can set up `transcription.*` (see docs)"]
+            if result.get("failed"):
+                notes.append(f"{result['failed']} failed via Telegram (Premium needed); the owner can set up local `transcription.*`")
+        return notes
+
     def _with_refresh_note(self, result: ToolResult) -> ToolResult:
-        if not self._refresh_note:
+        notes = [note for note in (self._refresh_note, self._job_note()) if note]
+        if not notes:
             return result
-        return replace(result, text=f"{result.text}\n{self._refresh_note}")
+        return replace(result, text="\n".join([result.text, *notes]))
 
     def _search(self, args: dict[str, Any]) -> ToolResult:
         query = str(args.get("query", "")).strip()
@@ -367,6 +603,8 @@ class AgentTools:
         minutes = int(policy.auto_refresh_minutes)
         if self.owner or not policy.allow_sync or minutes <= 0 or not chat_ids:
             return
+        if self.jobs is not None and self.jobs.running() is not None:
+            return  # the background download holds the Telegram session; its note says where it is
         cutoff = (self._now() - timedelta(minutes=minutes)).isoformat()
         marks = ", ".join("?" for _ in chat_ids)
         with self.db.connect() as conn:
@@ -598,6 +836,14 @@ def _period_label(scope: Scope) -> str:
 
 def _day(value: str | None) -> str:
     return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d") if value else "…"
+
+
+def _iso(value: Any) -> str:
+    return value.isoformat() if isinstance(value, datetime) else str(value)
+
+
+def _duration(seconds: float) -> str:
+    return f"{int(seconds)}s" if seconds < 90 else f"{round(seconds / 60)}m"
 
 
 def _best_effort(function: Callable[..., Any], *args: Any, **kwargs: Any) -> None:

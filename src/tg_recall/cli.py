@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 import shutil
 import sys
 from dataclasses import replace
@@ -11,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_tools import AgentTools, ToolResult, allowed_chat_ids
-from .agent_query import AgentQueryError
+from .agent_query import AgentQueryError, parse_when
 from .backup import create_backup, restore_backup
 from .config import AppConfig, load_config, redact_config, save_config, set_config_value
 from .media import MediaDownloader, MediaStore, copy_file_download
@@ -27,9 +28,11 @@ from .security import (
     require_agent_policy,
     require_human_confirmation,
 )
+from .mcp_server import record_call
 from .storage import Database, SchemaCompatibilityError
 from .telegram_client import TelegramArchiveClient, run_async
-from .transcription import FasterWhisperXXLProvider, TranscriptionService, WhisperCLIProvider
+from .transcription import TranscriptionService, WhisperCLIProvider, local_transcription_provider
+from .usage import usage_report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -120,13 +123,24 @@ def build_parser() -> argparse.ArgumentParser:
     read.add_argument("--limit", type=int)
     read.set_defaults(handler=cmd_read)
 
+    stats = sub.add_parser("stats", help="Counts per day/week/month, query hits, senders, topics")
+    stats.add_argument("--query", help="Count hits of this search query per period")
+    stats.add_argument("--by", choices=["day", "week", "month"], help="Period (default: by span)")
+    _add_read_scope(stats, target_help)
+    stats.set_defaults(handler=cmd_stats)
+
+    usage = sub.add_parser("usage", help="How agents used tg-recall: calls, tokens, empty searches, repeats")
+    usage.add_argument("--since", default="7d", help="ISO date or 7d, 24h (default 7d)")
+    usage.add_argument("--client", help="Only this MCP client (e.g. claude-code)")
+    usage.set_defaults(handler=cmd_usage)
+
     export = sub.add_parser("export", help="Write one chat or forum topic to JSONL")
     export.add_argument("--chat", type=_export_ref, required=True, dest="chat_ref", help="chat id, <chat>/<topic> or t.me/c/<id>/<topic>")
     export.add_argument("--topic", type=int, help="forum topic id")
     export.add_argument("--since")
     export.add_argument("--until")
     export.add_argument("--include", default="transcripts,media-metadata")
-    export.add_argument("--format", choices=["jsonl"], default="jsonl")
+    export.add_argument("--format", choices=["jsonl", "text"], default="jsonl", help="text: the read format, one line per message, for AI agents")
     export.add_argument("--output")
     export.add_argument("--limit", type=int, help="max messages (default: all)")
     export.set_defaults(handler=cmd_export)
@@ -206,8 +220,8 @@ def _add_read_scope(parser: argparse.ArgumentParser, target_help: str) -> None:
 
 # Commands that never run from an agent shell. search/read/chats/sync enforce
 # the AI policy themselves (AgentTools), so the CLI gate lets them through.
-_HUMAN_ONLY = {"config", "setup", "purge", "backup", "index", "telegram", "security", "jobs"}
-_AGENT_TOOLS = {"search", "read", "chats", "sync"}
+_HUMAN_ONLY = {"config", "setup", "purge", "backup", "index", "telegram", "security", "jobs", "usage"}
+_AGENT_TOOLS = {"search", "read", "chats", "sync", "stats"}
 
 
 def _enforce_agent_command(args: argparse.Namespace):
@@ -290,9 +304,16 @@ def _tool_args(args: argparse.Namespace, *names: str) -> dict[str, Any]:
 
 
 def _run_tool(args: argparse.Namespace, name: str, tool_args: dict[str, Any]) -> int:
+    tools = _tools(args)
+    started = time.monotonic()
     try:
-        return _emit_tool(args, getattr(_tools(args), name)(tool_args))
+        result = getattr(tools, name)(tool_args)
+        if not tools.owner:
+            record_call(tools.db, "cli", "cli", name, tool_args, started, text=result.text, count=result.count)
+        return _emit_tool(args, result)
     except AgentQueryError as exc:
+        if not tools.owner:
+            record_call(tools.db, "cli", "cli", name, tool_args, started, error=str(exc))
         # "chat_not_allowed: ..." carries a stable code; other messages are plain usage errors.
         message = str(exc)
         prefix = message.split(":", 1)[0]
@@ -314,6 +335,20 @@ def cmd_chats(args: argparse.Namespace) -> int:
 
 def cmd_sync(args: argparse.Namespace) -> int:
     return _run_tool(args, "sync", {**_tool_args(args, "chats", "since", "max_seconds"), "media": args.media})
+
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    return _run_tool(args, "stats", _tool_args(args, "query", "by", "chats", "since", "until", "media"))
+
+
+def cmd_usage(args: argparse.Namespace) -> int:
+    _, db = services(args)
+    since = parse_when(args.since)
+    report = usage_report(db, since=since, client=args.client)
+    if args.json:
+        return emit(args, {"text": report})
+    print(report)
+    return 0
 
 
 def cmd_search(args: argparse.Namespace) -> int:
@@ -440,8 +475,11 @@ def _export_target(args: argparse.Namespace) -> None:
 
 
 def cmd_export(args: argparse.Namespace) -> int:
-    cfg, db = services(args)
     _export_target(args)
+    if args.format == "text":
+        target = f"{args.chat_id}/{args.topic_id}" if args.topic_id is not None else str(args.chat_id)
+        return _run_tool(args, "export", {**_tool_args(args, "since", "until"), "chats": [target], "output": args.output})
+    cfg, db = services(args)
     filters = replace(_filters_from_args(args, args._agent_policy), topic_id=args.topic_id)
     limit = args._agent_policy.result_limit or args.limit if is_automation_shell() else args.limit
     items = db.export_messages(filters, limit=limit)
@@ -651,43 +689,10 @@ def _run_transcription_policy(
 
 def _run_local_whisper(cfg: AppConfig, db: Database, limit: int, media_ids: set[int] | None = None) -> dict[str, int]:
     store = MediaStore(cfg.media_dir, Path(cfg.cache_dir) / "downloads")
-    provider = _local_transcription_provider(cfg)
+    provider = local_transcription_provider(cfg)
     return TranscriptionService(
         db, fallback_provider=provider, media_store=store, cache_dir=Path(cfg.cache_dir) / "extracted-audio"
     ).run_pending(limit=limit, media_ids=media_ids)
-
-
-def _local_transcription_provider(cfg: AppConfig) -> WhisperCLIProvider | FasterWhisperXXLProvider:
-    """Build the profile-selected local provider without accepting shell syntax."""
-
-    settings = cfg.transcription
-    output_dir = Path(cfg.cache_dir) / "transcription"
-    if settings.backend == "whisper-cli":
-        return WhisperCLIProvider(
-            output_dir,
-            executable=settings.executable,
-            model=settings.model,
-            language=settings.language,
-            device=settings.device,
-            compute_type=settings.compute_type,
-            vad_filter=settings.vad_filter,
-            timeout_seconds=settings.timeout_seconds,
-        )
-    if settings.backend == "faster-whisper-xxl":
-        if settings.model is None:
-            raise RuntimeError("Faster-Whisper-XXL requires transcription.model")
-        return FasterWhisperXXLProvider(
-            output_dir,
-            executable=settings.executable,
-            model=settings.model,
-            model_dir=settings.model_dir,
-            language=settings.language,
-            device=settings.device,
-            compute_type=settings.compute_type,
-            vad_filter=settings.vad_filter,
-            timeout_seconds=settings.timeout_seconds,
-        )
-    raise RuntimeError("Unsupported configured local transcription backend")
 
 
 def _local_transcription_diagnostics(cfg: AppConfig) -> dict[str, Any]:
@@ -708,7 +713,7 @@ def _local_transcription_diagnostics(cfg: AppConfig) -> dict[str, Any]:
         else:
             model_available = False
     try:
-        _local_transcription_provider(cfg)
+        local_transcription_provider(cfg)
         options_valid = True
     except (RuntimeError, ValueError):
         options_valid = False

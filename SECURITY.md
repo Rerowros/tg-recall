@@ -14,14 +14,18 @@ Do not include session files, archive data, media, transcripts, real chat identi
 
 | Automated operation | Policy |
 | --- | --- |
-| `chats`, `search`, `read` (MCP and CLI), `export` | Allowed chats only, within `allowed_since`, `allowed_until`, `allowed_media_types` and result caps; agent exports stay below the profile `exports` directory. |
-| `sync` (MCP and CLI), auto-refresh before `search` / `read` | Only with `ai_access.allow_sync=true` and only for allowed chats. Reads Telegram and writes only the local archive; agents cannot queue media. |
+| `chats`, `search`, `read`, `stats` (MCP and CLI) | Allowed chats only, within `allowed_since`, `allowed_until`, `allowed_media_types` and result caps. |
+| `export` (MCP and CLI) | Allowed chats only, within the same date and media bounds and at most `ai_access.max_export_messages` messages (`0` removes the MCP tool). Agent exports are written only inside the profile `exports` directory; only the owner may choose another path. |
+| `sync` (MCP and CLI), auto-refresh before `search` / `read` / `stats` / `export` | Only with `ai_access.allow_sync=true` and only for allowed chats. Reads Telegram and writes only the local archive; agents cannot queue media. An MCP download that outlasts `sync_max_seconds` continues in the background of the MCP server process, one at a time, up to `sync_background_minutes`. |
+| `transcribe` (MCP) | Off unless the owner sets `ai_access.allow_transcribe=true`. At most 5 citations per call, each in an allowed chat, inside the date bounds and of an allowed media type; only voice, audio and video are transcribed. Downloads that media from Telegram and transcribes it with the owner-configured local provider, or asks Telegram to transcribe it. |
 | `media materialize`, `transcribe run --citation` | CLI only, for one permitted `tg://` citation and an allowed media type. |
-| `setup`, `telegram auth` / `check`, `chats --refresh`, `config`, `purge`, `backup`, `index`, `security`, `jobs`, `media usage` / `download`, `transcribe run` without `--citation` | Denied to agents. |
+| `setup`, `telegram auth` / `check`, `chats --refresh`, `config`, `purge`, `backup`, `index`, `security`, `jobs`, `usage`, `media usage` / `download`, `transcribe run` without `--citation` | Denied to agents. |
 | Sending, editing or marking messages as read in Telegram | Not implemented for anyone. |
 
 Policy allow/deny events record operation and safe scope identifiers only. They
 never retain raw query text, message content, credentials, or session data.
+
+The usage log is local audit data: one `agent_call` row per MCP call and per CLI tool call from an agent shell, with the tool, client, arguments (query, chats, dates, limits), output token estimate, latency and error code. It keeps arguments, including search queries, but never message text, credentials or session data. Only the owner can read it (`tg-recall usage`).
 
 ## Reporting A Vulnerability
 
