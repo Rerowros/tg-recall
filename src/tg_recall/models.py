@@ -57,6 +57,7 @@ class SearchFilters:
     media_types: tuple[str, ...] | None = None
     has_link: bool | None = None
     chat_ids: tuple[int, ...] | None = None
+    topic_id: int | None = None
 
     def normalized(self) -> "SearchFilters":
         if self.chat_id is not None and (isinstance(self.chat_id, bool) or not isinstance(self.chat_id, int)):
@@ -95,6 +96,7 @@ class SearchFilters:
             media_types=values,
             has_link=self.has_link,
             chat_ids=chat_ids,
+            topic_id=self.topic_id,
         )
 
 
