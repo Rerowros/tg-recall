@@ -30,6 +30,7 @@ class RenderContext:
     titles: dict[int, str]
     self_id: int | None = None
     full: bool = False
+    topics: dict[int, dict[int, str]] = field(default_factory=dict)
     now: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -72,10 +73,16 @@ def render_messages(
         shown = {message.message_id for message in messages if message is not None}
         targets = Counter(message.reply_to for message in messages if message is not None and message.reply_to)
         last_day: str | None = None
+        last_topic: int | None = None
         for message in messages:
             if message is None:
                 lines.append("  ⋯")
                 continue
+            if message.topic_id is not None and message.topic_id != last_topic:
+                title = ctx.topics.get(chat_id, {}).get(message.topic_id) or "topic"
+                lines.append(f"# {_clean(title, 60)} (/{message.topic_id})")
+                last_topic = message.topic_id
+                last_day = None
             local = _local(message.date)
             day = local.strftime("%Y-%m-%d") if local.year != ctx.now.astimezone().year else local.strftime("%m-%d")
             if day != last_day:
@@ -108,6 +115,10 @@ def render_chat_list(chats: Sequence[ChatInfo], now: datetime | None = None) -> 
         lines.append(
             f"{chat.chat_id} · {_clean(chat.title, 80)} · {chat.chat_type} · {_compact_count(chat.messages)} · {last} · {ago(chat.last_synced_at, now)}"
         )
+        if chat.topics:
+            shown = ", ".join(f"/{topic_id} {_clean(title, 30)} {_compact_count(count)}" for topic_id, title, count in chat.topics[:10])
+            more = f", +{len(chat.topics) - 10}" if len(chat.topics) > 10 else ""
+            lines.append(f"  topics: {shown}{more}")
     return "\n".join(lines)
 
 

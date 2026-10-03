@@ -338,3 +338,28 @@ def test_claude_code_shell_cannot_read_or_reconfigure_outside_allowlist(tmp_path
 
     assert main([*home, "config", "set", "ai_access.allowed_chat_ids", "10,11"]) == 1
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "agent_operation_forbidden"
+
+
+def test_sync_chat_cli_resolves_links_and_respects_the_allowlist_for_agents(tmp_path, monkeypatch, capsys) -> None:
+    _, db = agent_archive(tmp_path)
+    db.upsert_chat(ChatRecord(chat_id=10, title="Allowed", chat_type="supergroup", username="AllowedGroup"))
+    db.upsert_forum_topics(10, [(1, "General"), (157, "Русский")])
+    calls = []
+
+    async def fake_sync(self, chat_id, *, topic_id=None, since=None, max_seconds=60.0, max_messages=100_000):
+        assert since is None or since.tzinfo is not None
+        calls.append((chat_id, topic_id, since.astimezone().date().isoformat() if since else None))
+        return {"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 3, "complete": True,
+                "retry_after": None, "stored": 3, "oldest_date": None, "newest_date": None}
+
+    monkeypatch.setattr(TelegramArchiveClient, "sync_chat", fake_sync)
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: False))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    home = ["--home", str(tmp_path / "home"), "--json"]
+
+    assert main([*home, "sync", "chat", "https://t.me/AllowedGroup/157", "--since", "2025-06-01"]) == 0
+    out = capsys.readouterr().out
+    assert "\n" not in out.strip()  # compact JSON for agents
+    assert calls == [(10, 157, "2026-01-01")]  # policy allowed_since wins over an earlier request
+    assert main([*home, "sync", "chat", "11"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "chat_not_allowed"

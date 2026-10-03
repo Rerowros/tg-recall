@@ -208,3 +208,67 @@ def test_forum_topic_root_reply_marker_is_hidden(tmp_path) -> None:
     assert "↩183" not in text
     assert "↩201" in text  # target is shown
     assert "↩90" in text  # a hit pointing at a specific earlier message
+
+
+def forum_server(tmp_path, **policy) -> ReadOnlyMCPServer:
+    server = server_with_data(tmp_path, [10, -100], **policy)
+    db = server.db
+    db.upsert_chat(ChatRecord(chat_id=-100, title="Acme", chat_type="supergroup", username="AcmeChat"))
+    db.upsert_forum_topics(-100, [(1, "General"), (157, "Русский")])
+    rows = [
+        (500, 157, None, "привет, как настроить ноду"),
+        (501, 1, None, "hello general"),
+        (502, 157, 500, "через панель, ответ"),
+    ]
+    for offset, (message_id, topic, reply, text) in enumerate(rows):
+        db.upsert_message(
+            MessageRecord(
+                chat_id=-100, message_id=message_id, date=NOW - timedelta(minutes=30 - offset), text=text,
+                sender_id=50, sender_name="Алиса", reply_to_message_id=reply, topic_id=topic,
+            )
+        )
+    return server
+
+
+def test_forum_topic_by_link_or_title_reads_only_that_topic(tmp_path) -> None:
+    server = forum_server(tmp_path)
+
+    by_link = text_of(call(server, "read", {"chats": "https://t.me/AcmeChat/157", "since": "7d"}))
+    assert "# Русский (/157)" in by_link and "привет" in by_link and "↩500" in by_link
+    assert "hello general" not in by_link
+    by_title = text_of(call(server, "search", {"query": "панель", "chats": "Acme/русский"}))
+    assert ">502 " in by_title and "hello general" not in by_title  # context stays inside the topic
+    listing = text_of(call(server, "chats", {}))
+    assert "topics: /157 Русский 2" in listing
+    missing = call(server, "read", {"chats": "Acme/english"})
+    assert missing["result"]["isError"] is True and "no forum topic" in text_of(missing)
+
+
+def test_sync_tool_is_opt_in_and_scoped(tmp_path, monkeypatch) -> None:
+    from tg_recall.telegram_client import TelegramArchiveClient, TelegramBusyError
+
+    assert "sync" not in [tool["name"] for tool in forum_server(tmp_path / "off").tools()]
+    server = forum_server(tmp_path, allow_sync=True)
+    assert "sync" in [tool["name"] for tool in server.tools()]
+    seen = []
+
+    async def fake_sync(self, chat_id, *, topic_id=None, since=None, max_seconds=60.0, max_messages=100_000):
+        seen.append((chat_id, topic_id, since is not None))
+        return {"chat_id": chat_id, "topic_id": topic_id, "forum": True, "fetched": 40, "complete": True, "retry_after": None,
+                "stored": 42, "oldest_date": (NOW - timedelta(days=30)).isoformat(), "newest_date": NOW.isoformat()}
+
+    monkeypatch.setattr(TelegramArchiveClient, "sync_chat", fake_sync)
+    text = text_of(call(server, "sync", {"chats": "https://t.me/AcmeChat/157", "since": "2026-01-01"}))
+    assert seen == [(-100, 157, True)]
+    assert "Acme /157 Русский: +40 fetched · 42 stored" in text and "complete" in text
+    assert "read(chats=['-100/157']" in text
+
+    outside = call(server, "sync", {"chats": 11})
+    assert outside["result"]["isError"] is True and "chat_not_allowed" in text_of(outside)
+
+    async def busy(self, *args, **kwargs):
+        raise TelegramBusyError()
+
+    monkeypatch.setattr(TelegramArchiveClient, "sync_chat", busy)
+    response = call(server, "sync", {"chats": 10})
+    assert response["result"]["isError"] is True and text_of(response).startswith("busy")

@@ -88,6 +88,10 @@ class AIAccessPolicy:
     mcp_research_tools: bool = False
     # Put allowed chat titles into MCP initialize instructions (costs tokens in every session).
     instructions_list_chats: bool = False
+    # Let agents download allowed chats/topics from Telegram over MCP (reads Telegram, writes only the local archive).
+    allow_sync: bool = False
+    # Wall-clock limit of one MCP sync call; it resumes on the next call.
+    sync_max_seconds: int = 50
 
 
 @dataclass

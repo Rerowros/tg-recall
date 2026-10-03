@@ -27,6 +27,8 @@ class MessageRecord:
     has_media: bool = False
     media_type: str | None = None
     links_json: str = "[]"
+    # Forum topic root id (1 = General); None outside forum chats.
+    topic_id: int | None = None
 
 
 @dataclass(frozen=True)
