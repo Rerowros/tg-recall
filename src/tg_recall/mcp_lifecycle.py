@@ -268,8 +268,16 @@ def _run_stdio_loop(
         if not line.strip():
             continue
         state.note_method(request_method(line), clock())
-        request = json.loads(line)
-        if isinstance(request, dict) and "id" not in request:
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError:
+            print(json.dumps(_rpc_error(None, -32700, "Parse error")), flush=True, file=stdout)
+            continue
+        if not isinstance(request, dict):
+            # MCP since 2025-06-18 has no JSON-RPC batches; answer instead of crashing.
+            print(json.dumps(_rpc_error(None, -32600, "Invalid Request")), flush=True, file=stdout)
+            continue
+        if "id" not in request:
             # JSON-RPC notifications (e.g. notifications/initialized) never get a response.
             continue
         if parent is None:
@@ -281,6 +289,10 @@ def _run_stdio_loop(
             response = outcome[0]
         state.note_method(None, clock())
         print(json.dumps(response, ensure_ascii=False), flush=True, file=stdout)
+
+
+def _rpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
 def _run_watched(

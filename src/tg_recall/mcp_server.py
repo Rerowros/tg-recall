@@ -38,6 +38,9 @@ _BUDGET_PARAM = {"type": "integer", "description": "Max output tokens."}
 _INT = {"type": "integer"}
 _STR = {"type": "string"}
 _READ_ONLY = {"readOnlyHint": True, "openWorldHint": False}
+# Newest first. The server only uses tools, which every listed revision has
+# unchanged, so it answers in the revision the client asked for.
+PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 AGENT_TOOL_NAMES = ("search", "read", "stats", "export", "chats", "sync", "transcribe")
 _SCOPE_PROPS = {
     "chats": {"anyOf": _CHATS_TYPES},
@@ -102,12 +105,15 @@ class ReadOnlyMCPServer:
                 client = (params.get("clientInfo") or {}).get("name")
                 if isinstance(client, str) and client.strip():
                     self.client = client.strip()[:64]
+                requested = params.get("protocolVersion")
                 result = {
-                    "protocolVersion": "2025-03-26",
+                    "protocolVersion": requested if requested in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
                     "serverInfo": {"name": "tg-recall", "version": __version__},
                     "capabilities": {"tools": {}},
                     "instructions": _mcp_initialize_instructions(self.config, self.db),
                 }
+            elif method == "ping":
+                result = {}
             elif method == "tools/list":
                 result = {"tools": self.tools()}
             elif method == "tools/call":

@@ -16,6 +16,7 @@ REQUIRED_RUSSIAN_DOCS = (
     Path("docs/archive-maintenance.ru.md"),
     Path("docs/backup-restore.ru.md"),
     Path("docs/local-transcription.ru.md"),
+    Path("docs/compatibility.ru.md"),
 )
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 FENCED_BLOCK = re.compile(r"```([^\n]*)\n(.*?)```", re.DOTALL)
@@ -31,6 +32,7 @@ TRANSLATION_PAIRS = (
     (Path("docs/archive-maintenance.md"), Path("docs/archive-maintenance.ru.md")),
     (Path("docs/backup-restore.md"), Path("docs/backup-restore.ru.md")),
     (Path("docs/local-transcription.md"), Path("docs/local-transcription.ru.md")),
+    (Path("docs/compatibility.md"), Path("docs/compatibility.ru.md")),
 )
 
 

@@ -12,14 +12,14 @@ A local Telegram archive that your AI agents can query cheaply. `tg-recall` down
 
 It only reads Telegram: it never sends, edits or marks messages as read.
 
-> Alpha (current release: v0.8.1). The archive holds private conversations and a Telegram user session: keep the profile local, use full-disk encryption and verify important findings in Telegram. Upgrading from v0.6 or older? v0.7.0 removed many features; read the [changelog](CHANGELOG.md) and make a backup first.
+> Beta (current release: v0.9.0, the candidate for 1.0; see [compatibility](docs/compatibility.md)). The archive holds private conversations and a Telegram user session: keep the profile local, use full-disk encryption and verify important findings in Telegram. Upgrading from v0.6 or older? v0.7.0 removed many features; read the [changelog](CHANGELOG.md) and make a backup first.
 
 ## Install
 
 Requires Python 3.13+.
 
 ```powershell
-uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.8.1/tg_recall-0.8.1-py3-none-any.whl
+uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.9.0/tg_recall-0.9.0-py3-none-any.whl
 ```
 
 Install the universal wheel from the [GitHub Release](https://github.com/Rerowros/tg-recall/releases) (compare the SHA-256 digest GitHub shows). To upgrade, run the same command with the newer release URL plus `--force`. `uv tool install tg-recall` / `pip install tg-recall` will work once the package is on PyPI.
@@ -229,6 +229,7 @@ tg-recall backup restore D:\Backups\tg-recall-essential.zip --profile restored
 - [Changelog](CHANGELOG.md)
 - [Local transcription](docs/local-transcription.md)
 - [Backup and restore](docs/backup-restore.md)
+- [Compatibility](docs/compatibility.md)
 - [Archive maintenance](docs/archive-maintenance.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)

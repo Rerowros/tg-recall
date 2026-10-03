@@ -2,6 +2,20 @@
 
 [English](CHANGELOG.md) | [Русский](CHANGELOG.ru.md)
 
+## v0.9.0 - 2026-10-03
+
+The candidate for 1.0. Nothing was removed; existing archives, profiles and backups work as before.
+
+### Added
+
+- [Compatibility](docs/compatibility.md): what 1.x keeps compatible (MCP tools and arguments, CLI commands and options, `tg://` citations, configuration keys, archives and backups since v0.2.0) and what may change.
+- `tests/test_public_contract.py` checks that promise against a recorded snapshot; `tests/test_upgrade_compat.py` restores backups written by v0.2.0, v0.6.0 and v0.8.1 themselves and checks messages, transcripts, citations and agent settings after the migration.
+- `tg-recall --version`.
+
+### Fixed
+
+- The MCP server answers in the protocol revision the client asks for (`2025-11-25`, `2025-06-18`, `2025-03-26` or `2024-11-05`) instead of always `2025-03-26`, answers `ping`, and replies with an error to a malformed line or a batch instead of exiting.
+
 ## v0.8.1 - 2026-10-03
 
 ### Fixed
