@@ -131,8 +131,8 @@ def test_export_filters_one_topic_without_a_hidden_cap(tmp_path) -> None:
 def test_cli_export_takes_a_topic_reference(tmp_path, capsys) -> None:
     from tg_recall.cli import _export_ref, main
 
-    assert _export_ref("https://t.me/c/2957943244/157") == (-1002957943244, 157)
-    assert _export_ref("-1002957943244") == (-1002957943244, None)
+    assert _export_ref("https://t.me/c/1234567890/157") == (-1001234567890, 157)
+    assert _export_ref("-1001234567890") == (-1001234567890, None)
     home = tmp_path / "home"
     cfg = AppConfig.default(home)
     save_config(cfg, home=home)

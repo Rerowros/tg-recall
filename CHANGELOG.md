@@ -28,7 +28,7 @@ Agents can now work with big periods cheaply: `stats` counts instead of reading,
 
 ### Fixed
 
-- A chat and topic reference like `PasarGuard/157` no longer also selects a same-named chat that lacks that topic (for example a project's channel next to its forum).
+- A chat and topic reference like `Acme/157` no longer also selects a same-named chat that lacks that topic (for example a project's channel next to its forum).
 - Forum messages archived before 0.7 get their topic on the next start: a reply to a topic root becomes membership, a message without a reply goes to General, replies inherit their parent's topic. On a real archive this placed 43.8k of 46k such rows; rows whose parent is not archived stay without a topic.
 - `export` takes a forum topic (`--chat <chat>/<topic>`, `t.me/c/<id>/<topic>` or `--topic`), adds `topic_id` and `topic_title` to each row and no longer stops silently at 100,000 messages; with `--limit` it reports `truncated`.
 - A long `sync` prints progress to stderr every 10 seconds, so it is visibly alive.

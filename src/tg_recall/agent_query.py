@@ -149,7 +149,7 @@ def resolve_targets(
     Accepts ids, title fragments, t.me links (t.me/name/<topic>, t.me/c/<id>/<topic>)
     and "<chat>/<topic>" where the topic is an id or a title fragment. A
     fragment that matches several allowed chats selects all of them, which
-    lets "BPN" cover every BPN chat in one call.
+    lets "Acme" cover every Acme chat in one call.
     """
 
     allowed_set = tuple(dict.fromkeys(int(value) for value in allowed))

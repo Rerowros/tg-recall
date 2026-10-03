@@ -224,7 +224,7 @@ def test_forum_topic_root_reply_marker_is_hidden(tmp_path) -> None:
 def forum_server(tmp_path, **policy) -> ReadOnlyMCPServer:
     server = server_with_data(tmp_path, [10, -100], **policy)
     db = server.db
-    db.upsert_chat(ChatRecord(chat_id=-100, title="PasarGuard", chat_type="supergroup", username="PasarGuardGP"))
+    db.upsert_chat(ChatRecord(chat_id=-100, title="Acme", chat_type="supergroup", username="AcmeChat"))
     db.upsert_forum_topics(-100, [(1, "General"), (157, "Русский")])
     rows = [
         (500, 157, None, "привет, как настроить ноду"),
@@ -239,7 +239,7 @@ def forum_server(tmp_path, **policy) -> ReadOnlyMCPServer:
                 date=NOW - timedelta(minutes=30 - offset),
                 text=text,
                 sender_id=50,
-                sender_name="Влад",
+                sender_name="Алиса",
                 reply_to_message_id=reply,
                 topic_id=topic,
             )
@@ -250,20 +250,20 @@ def forum_server(tmp_path, **policy) -> ReadOnlyMCPServer:
 def test_forum_topic_by_link_or_title_reads_only_that_topic(tmp_path) -> None:
     server = forum_server(tmp_path)
     server.config.ai_access.allowed_chat_ids.append(-200)
-    server.db.upsert_chat(ChatRecord(chat_id=-200, title="PasarGuard news", chat_type="channel"))
+    server.db.upsert_chat(ChatRecord(chat_id=-200, title="Acme news", chat_type="channel"))
     server.db.upsert_message(
         MessageRecord(chat_id=-200, message_id=1, date=NOW - timedelta(minutes=5), text="привет из канала")
     )
-    assert "привет из канала" not in text_of(call(server, "read", {"chats": "PasarGuard/Русский", "since": "7d"}))
+    assert "привет из канала" not in text_of(call(server, "read", {"chats": "Acme/Русский", "since": "7d"}))
 
-    by_link = text_of(call(server, "read", {"chats": "https://t.me/PasarGuardGP/157", "since": "7d"}))
+    by_link = text_of(call(server, "read", {"chats": "https://t.me/AcmeChat/157", "since": "7d"}))
     assert "# Русский (/157)" in by_link and "привет" in by_link and "↩500" in by_link
     assert "hello general" not in by_link
-    by_title = text_of(call(server, "search", {"query": "панель", "chats": "PasarGuard/русский"}))
+    by_title = text_of(call(server, "search", {"query": "панель", "chats": "Acme/русский"}))
     assert ">502 " in by_title and "hello general" not in by_title  # context stays inside the topic
     listing = text_of(call(server, "chats", {}))
     assert "topics: /157 Русский 2" in listing
-    missing = call(server, "read", {"chats": "PasarGuard/english"})
+    missing = call(server, "read", {"chats": "Acme/english"})
     assert missing["result"]["isError"] is True and "no forum topic" in text_of(missing)
 
 
@@ -295,9 +295,9 @@ def test_sync_tool_is_opt_in_and_scoped(tmp_path, monkeypatch) -> None:
         ]
 
     monkeypatch.setattr(TelegramArchiveClient, "sync_many", fake_sync_many)
-    text = text_of(call(server, "sync", {"chats": "https://t.me/PasarGuardGP/157", "since": "2026-01-01"}))
+    text = text_of(call(server, "sync", {"chats": "https://t.me/AcmeChat/157", "since": "2026-01-01"}))
     assert seen == [([(-100, 157)], True)]
-    assert "PasarGuard /157 Русский: +40 · 42 stored" in text and "complete" in text
+    assert "Acme /157 Русский: +40 · 42 stored" in text and "complete" in text
 
     outside = call(server, "sync", {"chats": 11})
     assert outside["result"]["isError"] is True and "chat_not_allowed" in text_of(outside)
@@ -409,19 +409,19 @@ def test_long_sync_returns_early_and_reports_progress_then_results(tmp_path, mon
         ]
 
     monkeypatch.setattr(TelegramArchiveClient, "sync_many", slow_sync_many)
-    started = text_of(call(server, "sync", {"chats": "PasarGuard/157", "since": "2026-01-01"}))
+    started = text_of(call(server, "sync", {"chats": "Acme/157", "since": "2026-01-01"}))
     assert (
         started.startswith("sync running in background")
-        and "PasarGuard /157: 5000 msgs of ~19000 on Telegram" in started
+        and "Acme /157: 5000 msgs of ~19000 on Telegram" in started
     )
 
-    during = text_of(call(server, "read", {"chats": "PasarGuard/157", "since": "7d"}))
-    assert "sync running in background: PasarGuard /157" in during  # reads work meanwhile
+    during = text_of(call(server, "read", {"chats": "Acme/157", "since": "7d"}))
+    assert "sync running in background: Acme /157" in during  # reads work meanwhile
 
     release.set()
     server.jobs.current().done.wait(5)
     finished = text_of(call(server, "sync", {}))
-    assert "PasarGuard /157 Русский: +19000 · 19002 stored" in finished and "complete" in finished
+    assert "Acme /157 Русский: +19000 · 19002 stored" in finished and "complete" in finished
     again = text_of(call(server, "sync", {}))  # a status check must not start a new download of everything
     assert again.startswith("sync (finished ") and "+19000" in again
 
