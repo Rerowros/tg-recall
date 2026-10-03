@@ -312,7 +312,16 @@ def _from_data(data: dict[str, Any]) -> AppConfig:
     )
 
 
-_STRING_FIELDS = ("profile", "data_dir", "db_path", "media_dir", "state_dir", "cache_dir", "exports_dir", "credentials_path")
+_STRING_FIELDS = (
+    "profile",
+    "data_dir",
+    "db_path",
+    "media_dir",
+    "state_dir",
+    "cache_dir",
+    "exports_dir",
+    "credentials_path",
+)
 
 
 def _known(cls: type, values: dict[str, Any]) -> Any:

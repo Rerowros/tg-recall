@@ -18,7 +18,9 @@ from .storage import Database
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 _RELATIVE_RE = re.compile(r"^(\d+)\s*([mhdw])$")
 _CITATION_RE = re.compile(r"^(?:tg://chat/)?(-?\d+)(?:/message/|/)(\d+)$")
-_TME_RE = re.compile(r"^(?:https?://)?(?:t\.me|telegram\.me)/(c/)?([A-Za-z0-9_]+)(?:/(\d+))?(?:/(\d+))?/?(?:\?.*)?$", re.I)
+_TME_RE = re.compile(
+    r"^(?:https?://)?(?:t\.me|telegram\.me)/(c/)?([A-Za-z0-9_]+)(?:/(\d+))?(?:/(\d+))?/?(?:\?.*)?$", re.I
+)
 _STOPWORDS = frozenset(
     """
     и в во не что он на я с со как а то все она так его но да ты к у же вы за бы по только ее мне было вот от
@@ -106,7 +108,12 @@ def parse_when(value: str | None, *, end: bool = False, now: datetime | None = N
     match = _RELATIVE_RE.match(raw)
     if match:
         amount, unit = int(match.group(1)), match.group(2)
-        delta = {"m": timedelta(minutes=amount), "h": timedelta(hours=amount), "d": timedelta(days=amount), "w": timedelta(weeks=amount)}[unit]
+        delta = {
+            "m": timedelta(minutes=amount),
+            "h": timedelta(hours=amount),
+            "d": timedelta(days=amount),
+            "w": timedelta(weeks=amount),
+        }[unit]
         return (current - delta).astimezone(UTC).isoformat()
     try:
         if len(raw) == 10:
@@ -134,7 +141,9 @@ def resolve_chats(db: Database, allowed: Sequence[int], spec: Any) -> tuple[int,
     return resolve_targets(db, allowed, spec)[0]
 
 
-def resolve_targets(db: Database, allowed: Sequence[int], spec: Any) -> tuple[tuple[int, ...], tuple[tuple[int, int], ...]]:
+def resolve_targets(
+    db: Database, allowed: Sequence[int], spec: Any
+) -> tuple[tuple[int, ...], tuple[tuple[int, int], ...]]:
     """Resolve chats (and forum topics) against the allowlist only.
 
     Accepts ids, title fragments, t.me links (t.me/name/<topic>, t.me/c/<id>/<topic>)
@@ -168,12 +177,18 @@ def resolve_targets(db: Database, allowed: Sequence[int], spec: Any) -> tuple[tu
         matches = _title_matches(text, allowed_set, titles)
         if not matches and "/" in text:
             chat_part, topic_part = (part.strip() for part in text.rsplit("/", 1))
-            chats = [_allowed_chat(int(chat_part), allowed_set)] if re.fullmatch(r"-?\d+", chat_part) else _title_matches(chat_part, allowed_set, titles)
+            chats = (
+                [_allowed_chat(int(chat_part), allowed_set)]
+                if re.fullmatch(r"-?\d+", chat_part)
+                else _title_matches(chat_part, allowed_set, titles)
+            )
             # A same-named chat without that topic (e.g. the project's channel next to its forum) is not meant.
             with_topic = [(chat_id, _topic_ids(db, chat_id, topic_part)) for chat_id in chats]
             with_topic = [(chat_id, found) for chat_id, found in with_topic if found]
             if chats and not with_topic:
-                raise AgentQueryError(f"chats: no forum topic matches {topic_part!r} in {', '.join(titles.get(c) or str(c) for c in chats)}")
+                raise AgentQueryError(
+                    f"chats: no forum topic matches {topic_part!r} in {', '.join(titles.get(c) or str(c) for c in chats)}"
+                )
             for chat_id, found in with_topic:
                 chosen.append(chat_id)
                 topics.extend((chat_id, topic_id) for topic_id in found)
@@ -271,7 +286,9 @@ def list_chats(db: Database, chat_ids: Sequence[int], query: str | None = None) 
                     )
                 }
                 ranked = sorted(known, key=lambda topic_id: counts.get(topic_id, 0), reverse=True)
-                result[index] = replace(info, topics=tuple((topic_id, known[topic_id], counts.get(topic_id, 0)) for topic_id in ranked))
+                result[index] = replace(
+                    info, topics=tuple((topic_id, known[topic_id], counts.get(topic_id, 0)) for topic_id in ranked)
+                )
     result.sort(key=lambda item: item.last_date or "", reverse=True)
     return result
 
@@ -329,7 +346,9 @@ def resolve_sender(db: Database, spec: Any) -> tuple[tuple[int, ...] | None, str
     if text.casefold() in {"me", "я", "self"}:
         own = self_user_id(db)
         if own is None:
-            raise AgentQueryError("from='me' needs the owner's Telegram id; the owner should run `tg-recall telegram check`")
+            raise AgentQueryError(
+                "from='me' needs the owner's Telegram id; the owner should run `tg-recall telegram check`"
+            )
         return (own,), None
     if re.fullmatch(r"-?\d+", text):
         return (int(text),), None
@@ -470,19 +489,27 @@ class ArchiveStats:
 _UNIT_FORMATS = {"day": "%Y-%m-%d", "week": "%Y-W%W", "month": "%Y-%m"}
 
 
-def archive_stats(db: Database, scope: Scope, *, query: str | None = None, unit: str | None = None, top: int = 10) -> ArchiveStats:
+def archive_stats(
+    db: Database, scope: Scope, *, query: str | None = None, unit: str | None = None, top: int = 10
+) -> ArchiveStats:
     """Counts instead of messages: volume over time, senders, topics, query hits."""
 
     where, params = _scope_sql("m", scope)
     shift = f"{int((datetime.now().astimezone().utcoffset() or timedelta()).total_seconds() // 60):+d} minutes"
     with db.connect() as conn:
-        span = conn.execute(f"SELECT COUNT(*) AS n, MIN(m.date) AS first, MAX(m.date) AS last FROM messages m WHERE 1 = 1{where}", params).fetchone()
+        span = conn.execute(
+            f"SELECT COUNT(*) AS n, MIN(m.date) AS first, MAX(m.date) AS last FROM messages m WHERE 1 = 1{where}",
+            params,
+        ).fetchone()
         total, first, last = span["n"], span["first"], span["last"]
         if unit not in _UNIT_FORMATS:
             days = (datetime.fromisoformat(last) - datetime.fromisoformat(first)).days if first and last else 0
             unit = "day" if days <= 21 else "week" if days <= 180 else "month"
         bucket = f"strftime('{_UNIT_FORMATS[unit]}', m.date, '{shift}')"
-        volume = {row[0]: row[1] for row in conn.execute(f"SELECT {bucket}, COUNT(*) FROM messages m WHERE 1 = 1{where} GROUP BY 1", params)}
+        volume = {
+            row[0]: row[1]
+            for row in conn.execute(f"SELECT {bucket}, COUNT(*) FROM messages m WHERE 1 = 1{where} GROUP BY 1", params)
+        }
         hit_counts: dict[str, int] | None = None
         hits = None
         if query:
@@ -516,7 +543,10 @@ def archive_stats(db: Database, scope: Scope, *, query: str | None = None, unit:
         )
         chats = tuple(
             (row[0], row[1])
-            for row in conn.execute(f"SELECT m.chat_id, COUNT(*) AS n FROM messages m WHERE 1 = 1{where} GROUP BY m.chat_id ORDER BY n DESC", params)
+            for row in conn.execute(
+                f"SELECT m.chat_id, COUNT(*) AS n FROM messages m WHERE 1 = 1{where} GROUP BY m.chat_id ORDER BY n DESC",
+                params,
+            )
         )
     keys = sorted(set(volume) | set(hit_counts or {}))
     buckets = tuple((key, volume.get(key, 0), None if hit_counts is None else hit_counts.get(key, 0)) for key in keys)
@@ -551,7 +581,9 @@ def fetch_messages(db: Database, scope: Scope, keys: Sequence[tuple[int, int]]) 
     return result
 
 
-def context_window(db: Database, scope: Scope, chat_id: int, message_id: int, before: int, after: int) -> list[AgentMessage]:
+def context_window(
+    db: Database, scope: Scope, chat_id: int, message_id: int, before: int, after: int
+) -> list[AgentMessage]:
     """Neighbouring messages by position (not id arithmetic), within the scope."""
 
     if chat_id not in scope.chat_ids:
@@ -559,8 +591,12 @@ def context_window(db: Database, scope: Scope, chat_id: int, message_id: int, be
     window_scope = replace(scope, media_types=None, sender_ids=None, sender_name=None)
     where, params = _scope_sql("m", window_scope)
     with db.connect() as conn:
-        anchor = conn.execute("SELECT topic_id FROM messages WHERE chat_id = ? AND message_id = ?", (chat_id, message_id)).fetchone()
-        topic_sql, topic_params = ("", []) if not anchor or anchor["topic_id"] is None else (" AND m.topic_id = ?", [anchor["topic_id"]])
+        anchor = conn.execute(
+            "SELECT topic_id FROM messages WHERE chat_id = ? AND message_id = ?", (chat_id, message_id)
+        ).fetchone()
+        topic_sql, topic_params = (
+            ("", []) if not anchor or anchor["topic_id"] is None else (" AND m.topic_id = ?", [anchor["topic_id"]])
+        )
         older = conn.execute(
             f"SELECT {_MESSAGE_COLUMNS} FROM messages m WHERE m.chat_id = ? AND m.message_id < ?{where}{topic_sql} "
             "ORDER BY m.message_id DESC LIMIT ?",
@@ -686,7 +722,9 @@ def _scope_sql(alias: str, scope: Scope) -> tuple[str, list[Any]]:
     if scope.allowed_media is not None:
         # Policy media limits hide disallowed media rows but never plain text messages.
         if scope.allowed_media:
-            parts.append(f"({alias}.media_type IS NULL OR {alias}.media_type IN ({', '.join('?' for _ in scope.allowed_media)}))")
+            parts.append(
+                f"({alias}.media_type IS NULL OR {alias}.media_type IN ({', '.join('?' for _ in scope.allowed_media)}))"
+            )
             params.extend(scope.allowed_media)
         else:
             parts.append(f"{alias}.media_type IS NULL")
