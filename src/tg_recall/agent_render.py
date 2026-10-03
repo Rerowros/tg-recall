@@ -116,7 +116,9 @@ def render_chat_list(chats: Sequence[ChatInfo], now: datetime | None = None) -> 
             f"{chat.chat_id} · {_clean(chat.title, 80)} · {chat.chat_type} · {_compact_count(chat.messages)} · {last} · {ago(chat.last_synced_at, now)}"
         )
         if chat.topics:
-            shown = ", ".join(f"/{topic_id} {_clean(title, 30)} {_compact_count(count)}" for topic_id, title, count in chat.topics[:10])
+            shown = ", ".join(
+                f"/{topic_id} {_clean(title, 30)}" + (f" {_compact_count(count)}" if count else "") for topic_id, title, count in chat.topics[:10]
+            )
             more = f", +{len(chat.topics) - 10}" if len(chat.topics) > 10 else ""
             lines.append(f"  topics: {shown}{more}")
     return "\n".join(lines)
