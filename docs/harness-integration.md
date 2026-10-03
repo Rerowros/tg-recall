@@ -38,7 +38,7 @@ matrix всегда берётся из `integrate list --json` установл
 Для обычной установки используйте URL универсального wheel из GitHub Release:
 
 ```powershell
-uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.6.0/tg_recall-0.6.0-py3-none-any.whl
+uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.7.0/tg_recall-0.7.0-py3-none-any.whl
 ```
 
 Перед установкой при необходимости сверяйте опубликованный GitHub SHA-256

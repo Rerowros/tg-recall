@@ -2,7 +2,7 @@
 
 [English](CHANGELOG.md) | [Русский](CHANGELOG.ru.md)
 
-## Unreleased
+## v0.7.0 - 2026-10-03
 
 - Make `tg-recall-mcp` exit on stdin EOF, supervising parent death, unused timeout (`TG_RECALL_MCP_UNUSED_TIMEOUT_SEC`, default `600`), or idle timeout (`TG_RECALL_MCP_IDLE_TIMEOUT_SEC`, default `1800`). Set a timeout to `0` to disable it; set `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping.
 - Replace the MCP tools with `search`, `read` and `chats`: compact text, one line per message, sized to a token budget, with `tg://` citations. `read()` with no arguments returns what is new since this client's last read (first call: last 24h), a fair share per chat. The old `list_allowed_chats`, `list_scopes`, `search_messages`, `get_message_context`, `ask_archive` and `retrieve_evidence` tools are removed; research-session tools are exposed only with `ai_access.mcp_research_tools=true`.
@@ -13,6 +13,11 @@
 - Add `tg-recall sync chat <target> [--since 30d] [--max-seconds 3600]`: fills one chat or forum topic from a date to now in one interruption-safe run without the 1000-message cap; a topic is fetched alone instead of the whole group. Writes are batched per page; a lock file makes a second process on the same Telegram session fail with `busy`.
 - Store forwards as a short origin label; `telegram check` records the owner's id so agent output shows the owner as `я`.
 - `--json` output is compact (no indentation) when run by an AI agent.
+- Add an explicit opt-in OpenRouter embedding provider (`config embeddings choices|setup`, human-only; remote use needs `--allow-remote-text` and `provider_policy.external_embeddings_enabled`); `auto` retrieval falls back to FTS when it is unavailable.
+- Never prompt for a Telegram login outside `telegram auth`: `doctor`, `sync` and MCP fail fast with a clear error when the session is missing.
+- Write CLI and MCP stdio as UTF-8 regardless of the Windows console code page; MCP no longer answers JSON-RPC notifications.
+- Treat Claude Code and Codex shells (`CLAUDECODE`, `AI_AGENT`, `CODEX_*` without a TTY) as automation, so agent policy applies to their CLI calls.
+- Estimate tokens by character class (Cyrillic, Latin, digits, emoji) instead of one token per UTF-8 byte, so budgets fit about twice as much Russian text.
 
 ## v0.6.0 - 2026-08-04
 

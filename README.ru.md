@@ -10,7 +10,7 @@
 
 Local-first архив Telegram для людей и AI-агентов. `tg-recall` хранит только явно выбранные чаты в локальном профиле, индексирует текст сообщений и транскрипты и возвращает ссылки на источники вида `tg://chat/.../message/...`.
 
-> Ранняя alpha (текущий релиз: v0.6.0). Архив включает приватные переписки и пользовательскую Telegram-сессию. Храните профиль локально, используйте полное шифрование диска и проверяйте важные выводы в Telegram.
+> Ранняя alpha (текущий релиз: v0.7.0). Архив включает приватные переписки и пользовательскую Telegram-сессию. Храните профиль локально, используйте полное шифрование диска и проверяйте важные выводы в Telegram.
 
 ## Установка
 
@@ -30,7 +30,7 @@ uv run tg-recall setup
 подпись пакета.
 
 ```powershell
-uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.6.0/tg_recall-0.6.0-py3-none-any.whl
+uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.7.0/tg_recall-0.7.0-py3-none-any.whl
 tg-recall --json doctor
 ```
 
