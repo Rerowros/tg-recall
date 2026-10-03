@@ -35,7 +35,7 @@ from .security import harden_path
 _UNSET = object()
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 SCHEMA_BASELINE_VERSION = 2
 
 
@@ -242,6 +242,22 @@ MIGRATION_REGISTRY: tuple[Migration, ...] = (
         "CREATE INDEX IF NOT EXISTS evidence_member_sources_citation_idx ON evidence_member_sources(profile_id, citation, source_version)",
         "CREATE INDEX IF NOT EXISTS research_sessions_scope_updated_idx ON research_sessions(profile_id, scope_id, updated_at DESC, session_id)",
         "CREATE INDEX IF NOT EXISTS research_telemetry_session_idx ON research_session_telemetry(profile_id, session_id, telemetry_id DESC)",
+    )),
+    Migration(7, "agent-ux-v2", (
+        """CREATE TABLE IF NOT EXISTS agent_cursors (
+            profile_id TEXT NOT NULL,
+            client TEXT NOT NULL,
+            chat_id INTEGER NOT NULL,
+            last_message_id INTEGER NOT NULL,
+            seen_at TEXT NOT NULL,
+            PRIMARY KEY(profile_id, client, chat_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS agent_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TEXT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS messages_chat_date_idx ON messages(chat_id, date)",
     )),
 )
 
@@ -500,6 +516,14 @@ class Database:
         columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def set_meta(self, key: str, value: str | None) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO agent_meta(key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (key, value, now_iso()),
+            )
 
     def audit(self, event_type: str, scope: str | None = None, **details: Any) -> None:
         safe_details = redact_details(details)

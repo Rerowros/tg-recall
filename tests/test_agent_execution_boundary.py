@@ -163,10 +163,11 @@ def test_mcp_metadata_requires_enabled_access(tmp_path) -> None:
     cfg, db = agent_archive(tmp_path)
     cfg.ai_access.enabled = False
     response = ReadOnlyMCPServer(cfg, db).handle(
-        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_allowed_chats", "arguments": {}}}
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "chats", "arguments": {}}}
     )
 
-    assert response["error"]["data"]["code"] == "ai_access_disabled"
+    assert response["result"]["isError"] is True
+    assert "ai_access_disabled" in response["result"]["content"][0]["text"]
 
 
 def test_multi_media_policy_filters_cli_mcp_and_date_bounded_context(tmp_path, monkeypatch, capsys) -> None:
@@ -208,11 +209,12 @@ def test_multi_media_policy_filters_cli_mcp_and_date_bounded_context(tmp_path, m
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "search_messages", "arguments": {"query": "deadline", "chat_id": 10}},
+            "params": {"name": "search", "arguments": {"query": "deadline", "chat_id": 10, "context": 0}},
         }
     )
-    mcp_items = json.loads(mcp_rows["result"]["content"][0]["text"])
-    assert [item["message_id"] for item in mcp_items] == [3]
+    cited = mcp_rows["result"]["content"][0]["text"].split("cite: ", 1)[1].split()
+    # The MCP media policy hides disallowed media but keeps plain text; the date bound still applies.
+    assert sorted(cited) == ["tg://chat/10/message/1", "tg://chat/10/message/3"]
 
     cfg.ai_access.allowed_media_types = "all"
     cfg.ai_access.allowed_since = "2026-01-01"
@@ -221,13 +223,12 @@ def test_multi_media_policy_filters_cli_mcp_and_date_bounded_context(tmp_path, m
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "get_message_context", "arguments": {"chat_id": 10, "message_id": 2, "radius": 2}},
+            "params": {"name": "read", "arguments": {"refs": ["10/3"], "before": 2, "after": 0}},
         }
     )
-    context_items = json.loads(context["result"]["content"][0]["text"])
-    assert context_items
-    assert all(item["message_id"] != 2 for item in context_items)
-    assert all(item["timestamp"] >= "2026-01-01" for item in context_items)
+    window = context["result"]["content"][0]["text"]
+    assert ">3 " in window and "\n 1 " in window
+    assert "old deadline" not in window
 
 
 def test_successful_noop_sync_preserves_watermarks_and_clears_expired_retry(tmp_path, monkeypatch) -> None:

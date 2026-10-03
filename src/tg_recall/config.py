@@ -75,13 +75,19 @@ class ProviderPolicy:
 class AIAccessPolicy:
     enabled: bool = False
     allowed_chat_ids: list[int] = field(default_factory=list)
-    max_results: int = 5
+    max_results: int = 20
     # Optional policy boundaries are deliberately permissive by default to
     # preserve existing v0.2 configurations. Once configured, automation sees
     # only their intersection with a command or saved sync scope.
     allowed_since: str | None = None
     allowed_until: str | None = None
     allowed_media_types: str = "all"
+    # Messages one `read` call may return (search hits stay capped by max_results).
+    max_read_messages: int = 200
+    # Expose the resumable research-session tools over MCP (most agents never need them).
+    mcp_research_tools: bool = False
+    # Put allowed chat titles into MCP initialize instructions (costs tokens in every session).
+    instructions_list_chats: bool = False
 
 
 @dataclass

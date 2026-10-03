@@ -110,14 +110,11 @@ def test_cli_and_read_only_mcp_expose_machine_retrieval_provenance(tmp_path, cap
     cfg.ai_access.allowed_chat_ids = [10]
     cfg.ai_access.max_results = 2
     server = ReadOnlyMCPServer(cfg, db)
-    assert "retrieve_evidence" in {tool["name"] for tool in server.tools()}
     response = server.handle({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": "retrieve_evidence", "arguments": {"query": "alpha", "chat_id": 10, "mode": "auto", "token_budget": 1000}},
+        "params": {"name": "search", "arguments": {"query": "alpha", "chats": 10, "budget": 1000}},
     })
-    payload = json.loads(response["result"]["content"][0]["text"])
-    assert payload["mode"] == "keyword"
-    assert payload["evidence"][0]["citation"] == "tg://chat/10/message/1"
+    assert "tg://chat/10/message/1" in response["result"]["content"][0]["text"]
     denied = server.handle({
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
         "params": {"name": "index_embeddings_build", "arguments": {"chat_id": 10}},
