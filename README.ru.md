@@ -50,7 +50,7 @@ MCP, automation, lifecycle-команды и JSON-команды этого ни
 
 ## Использование с Claude Code / Codex / Cursor
 
-`tg-recall-mcp` — read-only stdio MCP-сервер. Пока вы явно не разрешите агентам конкретные чаты, он ничего не возвращает:
+`tg-recall-mcp` — stdio MCP-сервер поверх локального архива (по умолчанию read-only). Пока вы явно не разрешите агентам конкретные чаты, он ничего не возвращает:
 
 ```powershell
 tg-recall config set ai_access.enabled true
@@ -81,7 +81,7 @@ Cursor (`~/.cursor/mcp.json` или проектный `.cursor/mcp.json`) и д
 }
 ```
 
-Чтобы использовать не default-профиль, задайте `TG_RECALL_PROFILE` в окружении сервера. `tg-recall integrate install --target claude-code --scope user` (или `codex` / `cursor`) записывает ту же запись плюс инструкции агенту, с backup; см. [интеграцию harness](docs/harness-integration.md). После изменения MCP-конфига перезапустите клиент.
+Чтобы использовать не default-профиль, задайте `TG_RECALL_PROFILE` в окружении сервера. `tg-recall integrate install --target claude-code --scope user` (или `codex` / `cursor`) записывает ту же запись плюс инструкции агенту, с backup; см. [интеграцию harness](docs/harness-integration.md). После изменения MCP-конфига перезапустите клиент; правки `ai_access` запущенный сервер подхватывает без перезапуска.
 
 ## Постоянный bootstrap для AI-harness
 
@@ -210,7 +210,23 @@ tg-recall export --chat -1001234567890 --since 2026-01-01 --include transcripts,
 
 CLI может синхронизировать, скачивать и транскрибировать локальные архивы. Он
 не предоставляет agent-команды для аутентификации, изменения credentials, purge
-или Telegram write-операций. MCP остаётся read-only.
+или Telegram write-операций. MCP читает архив и, только если владелец это
+включил, синхронизирует разрешённые чаты (см. [MCP](#mcp)).
+
+Чтобы за один запуск заполнить один чат или тему форума от даты до текущего
+момента (без лимита в 1000 сообщений; прерывание безопасно, можно запустить
+снова):
+
+```powershell
+tg-recall sync chat https://t.me/<group>/<topic> --since 2026-01-01
+```
+
+Цель — id чата, фрагмент названия, ссылка t.me (`t.me/<username>/<topic>`,
+`t.me/c/<id>/<topic>`) или `<chat>/<topic>`. По умолчанию `--since` равен `30d`,
+`--max-seconds` — `3600`. Тема форума скачивается отдельно, а не вся группа
+целиком. Lock-файл не даёт двум процессам одновременно использовать одну
+Telegram-сессию; второй получает `busy`. При запуске AI-агентом вывод `--json`
+компактный (без отступов).
 
 Для ограниченной проверяемой офлайн-передачи в локальный AI-workflow создайте
 отдельный pack; существующая JSONL-команда `export` не меняется:
@@ -259,9 +275,45 @@ profile-local CLI-интеграция; нет ни MCP-инструмента �
 tg-recall-mcp
 ```
 
-MCP намеренно read-only и требует явной настройки `ai_access`. Он может выводить
-разрешённые кэшированные чаты и scopes, искать локальные сообщения, возвращать
-близкий контекст и предоставлять extractive retrieval со ссылками.
+MCP требует явной настройки `ai_access` и видит только разрешённые чаты.
+Инструменты отвечают компактным текстом, одна строка на сообщение, в пределах
+бюджета токенов:
+
+- `search(query)` — совпадения с пометкой `>`, автором, временем, соседним
+  контекстом и строкой `cite:` (`tg://chat/<id>/message/<id>`). Необязательно:
+  `chats`, `since`, `until`, `from`, `media`, `context`, `limit`, `budget`.
+- `read()` — без аргументов: новое с прошлого чтения этим клиентом (первый
+  вызов — последние 24 часа), поровну на каждый чат. `read(chats)` — последние
+  сообщения; `read(chats, since, until)` — период; `read(refs)` — окна вокруг
+  ссылок (`full=true` — без обрезки текста).
+- `chats()` — разрешённые чаты с числом сообщений, последней активностью,
+  возрастом синхронизации и темами форума.
+
+`chats` принимает id, фрагменты названий, ссылки t.me (`t.me/<username>/<topic>`,
+`t.me/c/<id>/<topic>`) и `<chat>/<topic>` (id или фрагмент названия темы);
+`chat_id` принимается как алиас. На неизвестный аргумент возвращается ошибка с
+подсказкой «did you mean». Собственные сообщения владельца показываются как `я`
+после `tg-recall telegram check`. Инструменты research sessions
+(`query_knowledge_catalog`, `inspect_research_session`, `expand_cited_sources`)
+доступны только при `ai_access.mcp_research_tools=true`.
+
+Необязательные ключи `ai_access`: `max_results` (совпадений в search, по
+умолчанию `20`), `max_read_messages` (`200`), `mcp_research_tools` (`false`),
+`instructions_list_chats` (названия разрешённых чатов в инструкциях MCP,
+`false`), `allow_sync` (`false`), `sync_max_seconds` (`50`).
+
+Чтобы агенты сами докачивали недостающий чат, тему или период, включите
+инструмент `sync`:
+
+```powershell
+tg-recall config set ai_access.allow_sync true
+```
+
+`sync(chats, since)` скачивает из Telegram в локальный архив один чат или тему
+форума (до 3 целей; `since` по умолчанию `30d`). Он только читает Telegram и
+ничего не отправляет, не выходит за allowlist и даты политики и ограничен по
+времени `sync_max_seconds`: частичный результат продолжается при следующем
+вызове.
 
 `tg-recall-mcp` — это stdio-процесс: он завершается по EOF на stdin, когда
 умирает supervising parent process, через `TG_RECALL_MCP_UNUSED_TIMEOUT_SEC`
@@ -286,8 +338,8 @@ tg-recall --json retrieve "deadline" --chat-id -1001234567890 --retrieval-mode a
 модель. `auto` сообщает о keyword fallback, когда vectors недоступны или
 устарели. `semantic` строгий и возвращает `semantic_unavailable`, а не называет
 token overlap vectors. `index embeddings rebuild` и `remove` — явные
-maintenance-команды только для человека; MCP предоставляет лишь ограниченный
-`retrieve_evidence` и никогда не строит, не перестраивает и не удаляет индекс.
+maintenance-команды только для человека; MCP никогда не строит, не
+перестраивает и не удаляет индекс.
 
 ### Удалённые OpenRouter embeddings (явный opt-in)
 
@@ -305,7 +357,7 @@ tg-recall --json index embeddings build --chat-id -1001234567890 --max-batches 1
 - `ask` по умолчанию использует extractive retrieval со ссылками. Необязательный OpenAI Responses provider требует свой extra, а также явные provider-policy и scope approval; отключённые или недоступные providers возвращают cited local fallback.
 - Устаревший `--semantic` использует локальное token overlap. Для необязательного local embedding index используйте `--retrieval-mode auto|hybrid|semantic`.
 - Local Whisper запускается через установленный исполняемый файл `whisper`; он не входит в пакет.
-- MCP не может синхронизировать, скачивать, транскрибировать, менять конфигурацию или очищать данные.
+- MCP может синхронизировать, только если владелец задал `ai_access.allow_sync=true`; скачивать медиа, транскрибировать, менять конфигурацию или очищать данные он не может.
 
 ## Миграция и backup
 
