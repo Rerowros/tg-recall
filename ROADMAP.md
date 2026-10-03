@@ -2,7 +2,7 @@
 
 [English](ROADMAP.md) | [Русский](ROADMAP.ru.md)
 
-`v0.8.1` is the current release. tg-recall is a local Telegram archive with a few cheap tools (`search`, `read`, `stats`, `export`, `chats`, `sync`, `transcribe`) for you and your AI agents over MCP or the CLI.
+`v0.9.0` is the current release and the candidate for 1.0. tg-recall is a local Telegram archive with a few cheap tools (`search`, `read`, `stats`, `export`, `chats`, `sync`, `transcribe`) for you and your AI agents over MCP or the CLI.
 
 ## Product principles
 
@@ -20,6 +20,11 @@
 - `v0.6.0`: Russian documentation and configurable local transcription.
 - `v0.7.0`: the core release. LLM answers, embeddings, research sessions, wiki memory, export packs, harness installers, self-update and sync scopes were removed; compact agent tools, forum topics, fast `sync` and agent auto-refresh were added.
 - `v0.8.0`: big periods for agents: `stats` counts, `export` to a file, background `sync`, `transcribe` for cited voice messages, search syntax and the `usage` log. See the [changelog](CHANGELOG.md).
+- `v0.9.0`: the 1.0 candidate: the [compatibility](docs/compatibility.md) promise, checked by contract and upgrade tests.
+
+## 1.0
+
+`v1.0.0` is `v0.9.0` after a period of real use without breaking changes, published to PyPI. From then on the [compatibility](docs/compatibility.md) rules apply: 1.x only adds.
 
 ## Next
 

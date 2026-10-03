@@ -1,0 +1,482 @@
+{
+ "mcp_tools": {
+  "search": {
+   "properties": {
+    "budget": {
+     "type": "integer"
+    },
+    "chats": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "context": {
+     "type": "integer"
+    },
+    "from": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      }
+     ]
+    },
+    "limit": {
+     "type": "integer"
+    },
+    "media": {
+     "enum": [
+      "voice",
+      "audio",
+      "photo",
+      "video",
+      "document",
+      "any"
+     ],
+     "type": "string"
+    },
+    "query": {
+     "type": "string"
+    },
+    "since": {
+     "type": "string"
+    },
+    "until": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "query"
+   ]
+  },
+  "read": {
+   "properties": {
+    "after": {
+     "type": "integer"
+    },
+    "before": {
+     "type": "integer"
+    },
+    "budget": {
+     "type": "integer"
+    },
+    "chats": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "from": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      }
+     ]
+    },
+    "full": {
+     "type": "boolean"
+    },
+    "limit": {
+     "type": "integer"
+    },
+    "media": {
+     "enum": [
+      "voice",
+      "audio",
+      "photo",
+      "video",
+      "document",
+      "any"
+     ],
+     "type": "string"
+    },
+    "refs": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "since": {
+     "type": "string"
+    },
+    "until": {
+     "type": "string"
+    }
+   },
+   "required": []
+  },
+  "stats": {
+   "properties": {
+    "by": {
+     "enum": [
+      "day",
+      "week",
+      "month"
+     ],
+     "type": "string"
+    },
+    "chats": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "from": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      }
+     ]
+    },
+    "media": {
+     "enum": [
+      "voice",
+      "audio",
+      "photo",
+      "video",
+      "document",
+      "any"
+     ],
+     "type": "string"
+    },
+    "query": {
+     "type": "string"
+    },
+    "since": {
+     "type": "string"
+    },
+    "until": {
+     "type": "string"
+    }
+   },
+   "required": []
+  },
+  "export": {
+   "properties": {
+    "chats": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "from": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      }
+     ]
+    },
+    "media": {
+     "enum": [
+      "voice",
+      "audio",
+      "photo",
+      "video",
+      "document",
+      "any"
+     ],
+     "type": "string"
+    },
+    "since": {
+     "type": "string"
+    },
+    "until": {
+     "type": "string"
+    }
+   },
+   "required": []
+  },
+  "chats": {
+   "properties": {
+    "query": {
+     "type": "string"
+    }
+   },
+   "required": []
+  },
+  "sync": {
+   "properties": {
+    "chats": {
+     "anyOf": [
+      {
+       "type": "integer"
+      },
+      {
+       "type": "string"
+      },
+      {
+       "items": {
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "string"
+         }
+        ]
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "since": {
+     "type": "string"
+    }
+   },
+   "required": []
+  },
+  "transcribe": {
+   "properties": {
+    "refs": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "refs"
+   ]
+  }
+ },
+ "cli": {
+  "tg-recall": [
+   "--config",
+   "--home",
+   "--json",
+   "--profile",
+   "--version"
+  ],
+  "tg-recall backup": [],
+  "tg-recall backup create": [
+   "--include-session",
+   "--mode",
+   "--output"
+  ],
+  "tg-recall backup restore": [
+   "--replace",
+   "archive"
+  ],
+  "tg-recall chats": [
+   "--all",
+   "--limit",
+   "--refresh",
+   "query"
+  ],
+  "tg-recall config": [],
+  "tg-recall config set": [
+   "key",
+   "value"
+  ],
+  "tg-recall config show": [],
+  "tg-recall doctor": [],
+  "tg-recall export": [
+   "--chat",
+   "--format",
+   "--include",
+   "--limit",
+   "--output",
+   "--since",
+   "--topic",
+   "--until"
+  ],
+  "tg-recall index": [],
+  "tg-recall index rebuild": [],
+  "tg-recall jobs": [
+   "--apply",
+   "--chat-id",
+   "--limit",
+   "--older-than",
+   "--override-retry-after",
+   "--repair",
+   "--retry",
+   "--retryable",
+   "--stage",
+   "--stale-after-hours",
+   "--status"
+  ],
+  "tg-recall media": [],
+  "tg-recall media download": [
+   "--limit"
+  ],
+  "tg-recall media materialize": [
+   "--citation"
+  ],
+  "tg-recall media usage": [],
+  "tg-recall purge": [
+   "--all",
+   "--chat-id"
+  ],
+  "tg-recall read": [
+   "--after",
+   "--before",
+   "--budget",
+   "--chat",
+   "--from",
+   "--full",
+   "--limit",
+   "--media",
+   "--since",
+   "--until",
+   "refs"
+  ],
+  "tg-recall search": [
+   "--budget",
+   "--chat",
+   "--context",
+   "--from",
+   "--limit",
+   "--media",
+   "--since",
+   "--until",
+   "query"
+  ],
+  "tg-recall security": [],
+  "tg-recall security check": [
+   "--fix"
+  ],
+  "tg-recall setup": [],
+  "tg-recall stats": [
+   "--by",
+   "--chat",
+   "--from",
+   "--media",
+   "--query",
+   "--since",
+   "--until"
+  ],
+  "tg-recall sync": [
+   "--max-seconds",
+   "--media",
+   "--since",
+   "chats"
+  ],
+  "tg-recall telegram": [],
+  "tg-recall telegram auth": [],
+  "tg-recall telegram check": [],
+  "tg-recall transcribe": [],
+  "tg-recall transcribe run": [
+   "--citation",
+   "--limit",
+   "--provider"
+  ],
+  "tg-recall usage": [
+   "--client",
+   "--since"
+  ]
+ },
+ "config": {
+  "telegram.api_id": "int | None",
+  "telegram.api_hash": "str | None",
+  "telegram.phone": "str | None",
+  "ai_access.enabled": "bool",
+  "ai_access.allowed_chat_ids": "list[int]",
+  "ai_access.allow_all_chats": "bool",
+  "ai_access.max_results": "int",
+  "ai_access.allowed_since": "str | None",
+  "ai_access.allowed_until": "str | None",
+  "ai_access.allowed_media_types": "str",
+  "ai_access.max_read_messages": "int",
+  "ai_access.instructions_list_chats": "bool",
+  "ai_access.allow_sync": "bool",
+  "ai_access.sync_max_seconds": "int",
+  "ai_access.sync_background_minutes": "int",
+  "ai_access.auto_refresh_minutes": "int",
+  "ai_access.max_export_messages": "int",
+  "ai_access.allow_transcribe": "bool",
+  "transcription.backend": "str",
+  "transcription.executable": "str | None",
+  "transcription.model": "str | None",
+  "transcription.model_dir": "str | None",
+  "transcription.language": "str | None",
+  "transcription.device": "str | None",
+  "transcription.compute_type": "str | None",
+  "transcription.vad_filter": "bool | None",
+  "transcription.timeout_seconds": "int"
+ },
+ "citation": "tg://chat/<chat_id>/message/<message_id>",
+ "backup": {
+  "format": "tg-recall-backup",
+  "version": 1
+ }
+}

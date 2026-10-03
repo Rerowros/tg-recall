@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .agent_tools import AgentTools, ToolResult, allowed_chat_ids
 from .agent_query import AgentQueryError, parse_when
 from .backup import create_backup, restore_backup
@@ -77,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--home", help="Portable tg-recall root")
     parser.add_argument("--profile", help="Telegram archive profile")
     parser.add_argument("--json", action="store_true", help="Write machine-readable result to stdout")
+    parser.add_argument("--version", action="version", version=f"tg-recall {__version__}")
     parser.add_argument("--confirm-risk", help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 

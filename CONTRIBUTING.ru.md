@@ -25,6 +25,10 @@ uv build
 - Перед ревью запустите `uv run ruff check .`, `uv run ruff format --check .` и `uv run pytest -q`.
 - Внедрение форматирования идёт постепенно: проверка форматирования всего репозитория сообщает об устаревших файлах, пока не запланирован отдельный механический проход. Форматируйте каждый затронутый Python-файл с помощью `uv run ruff format <paths>` и не скрывайте оставшиеся файлы исключениями Ruff.
 
+## Совместимость
+
+[docs/compatibility.ru.md](docs/compatibility.ru.md) перечисляет, что сохраняет 1.x. Если `tests/test_public_contract.py` сообщает о ломающем изменении, сохраните работу старого варианта; если о добавлении — запишите его через `TG_RECALL_UPDATE_CONTRACT=1 uv run pytest tests/test_public_contract.py` и упомяните в журнале изменений. Релиз, который меняет схему, конфигурацию профиля или формат бэкапа, добавляет и фикстуру обновления: `uv run python scripts/make_upgrade_fixture.py <tag>`.
+
 ## Замер на агенте
 
 `scripts/agent_bench.py` показывает, как изменение влияет на настоящих агентов: положите 10-15 своих вопросов в `<profile data dir>/bench/questions.json` (формат — `scripts/bench_questions.example.json`), запустите `uv run python scripts/agent_bench.py` до и после изменения и сравните два файла результатов через `--compare`. Нужен залогиненный CLI `claude`; прогон тратит настоящие токены. Вопросы и результаты не коммитьте: в них названия ваших чатов.
