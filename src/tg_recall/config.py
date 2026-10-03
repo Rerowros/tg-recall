@@ -3,8 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import warnings
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -46,11 +45,6 @@ _SAFE_TRANSCRIPTION_DEVICE = re.compile(r"(?:auto|cpu|cuda(?::[0-9]{1,3})?)\Z")
 _SAFE_TRANSCRIPTION_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _SAFE_TRANSCRIPTION_LANGUAGE = re.compile(r"[A-Za-z]+(?: [A-Za-z]+)*\Z")
 _MAX_TRANSCRIPTION_TIMEOUT_SECONDS = 3_600
-OPENROUTER_EMBEDDING_MODELS = {
-    "perplexity/pplx-embed-v1-0.6b": {"label": "Perplexity Embed 0.6B", "usd_per_million_input_tokens": 0.004},
-    "perplexity/pplx-embed-v1-4b": {"label": "Perplexity Embed 4B", "usd_per_million_input_tokens": 0.03},
-    "voyageai/voyage-4-lite": {"label": "Voyage 4 Lite", "usd_per_million_input_tokens": 0.02},
-}
 
 
 @dataclass
@@ -62,19 +56,11 @@ class TelegramConfig:
 
 
 @dataclass
-class ProviderPolicy:
-    external_llm_enabled: bool = False
-    # An empty list is a deliberate default-deny boundary. Only these two
-    # declared fields may be serialized in an external LLM request.
-    external_llm_data_classes: list[str] = field(default_factory=list)
-    external_transcription_enabled: bool = False
-    external_embeddings_enabled: bool = False
-
-
-@dataclass
 class AIAccessPolicy:
     enabled: bool = False
     allowed_chat_ids: list[int] = field(default_factory=list)
+    # Every archived chat is allowed (the list above is then ignored).
+    allow_all_chats: bool = False
     max_results: int = 20
     # Optional policy boundaries are deliberately permissive by default to
     # preserve existing v0.2 configurations. Once configured, automation sees
@@ -84,43 +70,14 @@ class AIAccessPolicy:
     allowed_media_types: str = "all"
     # Messages one `read` call may return (search hits stay capped by max_results).
     max_read_messages: int = 200
-    # Expose the resumable research-session tools over MCP (most agents never need them).
-    mcp_research_tools: bool = False
     # Put allowed chat titles into MCP initialize instructions (costs tokens in every session).
     instructions_list_chats: bool = False
     # Let agents download allowed chats/topics from Telegram over MCP (reads Telegram, writes only the local archive).
     allow_sync: bool = False
     # Wall-clock limit of one MCP sync call; it resumes on the next call.
     sync_max_seconds: int = 50
-
-
-@dataclass
-class LLMConfig:
-    """Provider identity plus one private credential loaded outside profile JSON.
-
-    The default is intentionally local/extractive.  ``api_key`` is written
-    only by the normal profile save path into that profile's private
-    credentials file; it is never part of profile configuration or exposed
-    unredacted by config output. Explicit legacy-path saves retain their historical,
-    caller-owned monolithic format for compatibility.
-    """
-
-    provider: str = "extractive"
-    model: str | None = None
-    api_key: str | None = None
-
-
-@dataclass
-class SemanticConfig:
-    enabled: bool = False
-    provider: str = "local-token"
-    # `sentence-transformers-local` is an opt-in path to files the user has
-    # already downloaded.  It is never interpreted as a hub model identifier.
-    model_path: str | None = None
-    model: str | None = None
-    device: str = "cpu"
-    batch_size: int = 32
-    request_timeout_seconds: int = 20
+    # With allow_sync, search/read first pull new messages for chats synced longer ago than this (0 = off).
+    auto_refresh_minutes: int = 10
 
 
 @dataclass
@@ -181,13 +138,9 @@ class AppConfig:
     state_dir: str = ""
     cache_dir: str = ""
     exports_dir: str = ""
-    wiki_dir: str = ""
     credentials_path: str = ""
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
-    provider_policy: ProviderPolicy = field(default_factory=ProviderPolicy)
     ai_access: AIAccessPolicy = field(default_factory=AIAccessPolicy)
-    llm: LLMConfig = field(default_factory=LLMConfig)
-    semantic: SemanticConfig = field(default_factory=SemanticConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
 
     @classmethod
@@ -201,7 +154,6 @@ class AppConfig:
             state_dir=str(paths.profile_state_dir),
             cache_dir=str(paths.profile_cache_dir),
             exports_dir=str(paths.exports_dir),
-            wiki_dir=str(paths.wiki_dir),
             credentials_path=str(paths.credentials_path),
             telegram=TelegramConfig(session_path=str(paths.session_path)),
         )
@@ -213,9 +165,6 @@ class AppConfig:
             Path(self.state_dir),
             Path(self.cache_dir),
             Path(self.exports_dir),
-            Path(self.wiki_dir) / "raw",
-            Path(self.wiki_dir) / "pages",
-            Path(self.wiki_dir) / "revisions",
             Path(self.telegram.session_path).parent,
             Path(self.db_path).parent,
             Path(self.credentials_path).parent,
@@ -231,10 +180,6 @@ def app_paths(home: str | Path | None = None, profile: str | None = None) -> App
 def config_path(path: str | Path | None = None, *, home: str | Path | None = None) -> Path:
     if path:
         return Path(path).expanduser().resolve()
-    legacy_home = os.environ.get("TG_ECOSYSTEM_HOME")
-    if legacy_home and not home and not os.environ.get("TG_RECALL_HOME"):
-        warnings.warn("TG_ECOSYSTEM_HOME is deprecated; run `tg-recall migrate legacy`", UserWarning, stacklevel=2)
-        return Path(legacy_home).expanduser().resolve() / "config.json"
     return AppPaths.resolve(home).config_path
 
 
@@ -326,21 +271,16 @@ def _from_parts(paths: AppPaths, profile_raw: dict[str, Any], credentials: dict[
         "state_dir",
         "cache_dir",
         "exports_dir",
-        "wiki_dir",
         "credentials_path",
     ):
         merged[key] = default[key]
     merged["telegram"] = _deep_merge(merged["telegram"], credentials.get("telegram", {}))
-    merged["llm"] = _deep_merge(merged["llm"], credentials.get("llm", {}))
     return _from_data(merged)
 
 
 def _profile_data(config: AppConfig) -> dict[str, Any]:
     return {
-        "provider_policy": asdict(config.provider_policy),
         "ai_access": asdict(config.ai_access),
-        "llm": {"provider": config.llm.provider, "model": config.llm.model},
-        "semantic": asdict(config.semantic),
         "transcription": asdict(config.transcription),
     }
 
@@ -352,28 +292,26 @@ def _credentials_data(config: AppConfig) -> dict[str, Any]:
             "api_hash": config.telegram.api_hash,
             "phone": config.telegram.phone,
         },
-        "llm": {"api_key": config.llm.api_key},
     }
 
 
 def _from_data(data: dict[str, Any]) -> AppConfig:
+    # Keys of removed features (llm, semantic, provider_policy, ...) in older
+    # profile files are ignored instead of failing the whole load.
     return AppConfig(
-        profile=data["profile"],
-        data_dir=data["data_dir"],
-        db_path=data["db_path"],
-        media_dir=data["media_dir"],
-        state_dir=data["state_dir"],
-        cache_dir=data["cache_dir"],
-        exports_dir=data["exports_dir"],
-        wiki_dir=data["wiki_dir"],
-        credentials_path=data["credentials_path"],
-        telegram=TelegramConfig(**data["telegram"]),
-        provider_policy=ProviderPolicy(**data["provider_policy"]),
-        ai_access=AIAccessPolicy(**data["ai_access"]),
-        llm=LLMConfig(**data["llm"]),
-        semantic=SemanticConfig(**data["semantic"]),
-        transcription=TranscriptionConfig(**data.get("transcription", {})),
+        **{key: data[key] for key in _STRING_FIELDS},
+        telegram=_known(TelegramConfig, data.get("telegram", {})),
+        ai_access=_known(AIAccessPolicy, data.get("ai_access", {})),
+        transcription=_known(TranscriptionConfig, data.get("transcription", {})),
     )
+
+
+_STRING_FIELDS = ("profile", "data_dir", "db_path", "media_dir", "state_dir", "cache_dir", "exports_dir", "credentials_path")
+
+
+def _known(cls: type, values: dict[str, Any]) -> Any:
+    names = {item.name for item in fields(cls)}
+    return cls(**{key: value for key, value in values.items() if key in names})
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -402,13 +340,8 @@ def _coerce_config_value(current: Any, value: str, leaf: str) -> Any:
     if leaf == "vad_filter":
         return _coerce_bool(value, leaf)
     if isinstance(current, list):
-        if leaf.endswith("_data_classes"):
-            values = [item.strip() for item in value.split(",") if item.strip()]
-            allowed = {"message_text", "metadata"}
-            if len(values) != len(set(values)) or set(values) != allowed:
-                raise ValueError("external_llm_data_classes must be exactly message_text,metadata")
-            return sorted(values)
-        return [int(item.strip()) for item in value.split(",") if item.strip()]
+        # Accept "1,2", "[1, 2]" and "1 2" alike; agents and shells write all three.
+        return [int(item) for item in value.strip().strip("[]").replace(",", " ").split()]
     if isinstance(current, int) or leaf == "api_id":
         return int(value)
     return value

@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Iterable, Sequence
 
 from .agent_query import AgentMessage, ChatInfo
-from .context_budgeting import estimate_text_tokens
+from .tokens import estimate_text_tokens
 
 HIT_CHARS = 600
 CONTEXT_CHARS = 200

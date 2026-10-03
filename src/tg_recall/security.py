@@ -124,9 +124,9 @@ def resolve_agent_policy(
     if operation == AgentOperation.AGENT_GUIDE:
         return PolicyDecision(operation=operation, allowed=True)
     if not enabled:
-        return _denied(operation, "ai_access_disabled", "archive access is disabled for AI/automation mode")
+        return _denied(operation, "ai_access_disabled", "AI access is off; the owner runs `tg-recall config set ai_access.enabled true`")
     if not allowed_chat_ids:
-        return _denied(operation, "ai_access_unconfigured", "AI/automation archive access requires allowed chat ids")
+        return _denied(operation, "ai_access_unconfigured", "no chats are allowed for AI yet; the owner runs `tg-recall config set ai_access.allowed_chat_ids <id>,<id>` (ids: `tg-recall chats`) or `ai_access.allow_all_chats true`")
     if not isinstance(max_results, int) or isinstance(max_results, bool) or max_results < 1:
         return _denied(operation, "invalid_ai_access_limit", "ai_access.max_results must be a positive integer")
 
