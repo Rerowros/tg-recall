@@ -19,7 +19,7 @@ contains one **public** channel.
   ```
 
 - Pick one public channel and note its numeric ID (`-100...`). Find it off
-  camera: never record `tg-recall chats list`, `config show`, `telegram auth`,
+  camera: never record `tg-recall chats`, `config show`, `telegram auth`,
   or `doctor` because they reveal chat titles, phone number, or local paths.
 - Allow only that channel for agents:
 
@@ -28,7 +28,7 @@ contains one **public** channel.
   tg-recall config set ai_access.allowed_chat_ids "-100CHANNELID"
   ```
 
-- Warm the archive once off camera (`sync ensure` below) so the on-camera run
+- Warm the archive once off camera (the `sync` below) so the on-camera run
   is fast and incremental.
 - Register the MCP server in Claude Code with the same environment:
   `claude mcp add --scope user tg-recall -e TG_RECALL_HOME=D:\tg-recall-demo -e TG_RECALL_PROFILE=demo -- tg-recall-mcp`.
@@ -43,7 +43,7 @@ clear hits in your chosen channel. Rehearse until the whole run fits in 30 s.
 | Time | On screen | Say / caption |
 | --- | --- | --- |
 | 0-3 s | Title card or first prompt | "tg-recall: your Telegram, searchable by you and your AI agents - locally." |
-| 3-10 s | `tg-recall --json sync ensure demo --chat -100CHANNELID --since 2026-09-01 --limit 200` | "Only the chats you choose are synced into local SQLite (FTS5). Incremental, FloodWait-safe." |
+| 3-10 s | `tg-recall sync -100CHANNELID --since 2026-09-01` | "Only the chats you choose are synced into local SQLite (FTS5). Incremental, FloodWait-safe." |
 | 10-16 s | `tg-recall search "release"` | "Instant full-text search. Every hit has a `tg://` citation back to the original message." |
 | 16-28 s | `claude -p "What did this channel announce about releases this month? Cite messages." --allowedTools "mcp__tg-recall"` | "Claude Code reads the same archive over a read-only MCP server and answers with citations." |
 | 28-30 s | Hold on the cited answer, then end card | "Read-only MCP, chat allowlist, no cloud. github.com/Rerowros/tg-recall" |
@@ -74,7 +74,7 @@ Set FontSize 20
 Set Width 1200
 Set Height 700
 Set TypingSpeed 40ms
-Type "tg-recall --json sync ensure demo --chat -100CHANNELID --since 2026-09-01 --limit 200"
+Type "tg-recall sync -100CHANNELID --since 2026-09-01"
 Enter
 Sleep 4s
 Type "tg-recall search release"

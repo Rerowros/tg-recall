@@ -92,7 +92,7 @@ class AgentTools:
         found = list_chats(self.db, self._allowed(), args.get("query"))
         if self.owner and not args.get("all"):
             found = [item for item in found if item.messages] or found
-        return ToolResult(render_chat_list(found, self._now()), len(found), tuple(item.chat_id for item in found) or decision.chat_ids)
+        return ToolResult(render_chat_list(found, self._now(), owner=self.owner), len(found), tuple(item.chat_id for item in found) or decision.chat_ids)
 
     def sync(self, args: dict[str, Any]) -> ToolResult:
         """Download chats or forum topics from Telegram into the archive.

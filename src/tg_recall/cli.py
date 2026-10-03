@@ -482,7 +482,7 @@ def cmd_media_materialize(args: argparse.Namespace) -> int:
     chat_id, message_id = _parse_citation(args.citation)
     media = db.media_for_message(chat_id, message_id)
     if not media:
-        raise ValueError("no archived media for citation; run sync ensure with an appropriate media policy first")
+        raise ValueError("no archived media for citation; run `tg-recall sync <chat> --media all` (or voice,audio) first")
     if is_automation_shell() and not _media_policy_allows(args._agent_policy.media_policy, [value.media_type for value in media]):
         raise AgentPolicyError(_policy_denial(args._agent_policy, "media_not_allowed", "cited media is outside AI/automation media policy"))
     if any(value.status != "downloaded" for value in media):

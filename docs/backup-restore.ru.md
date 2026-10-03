@@ -11,7 +11,7 @@ tg-recall backup create --mode full --output D:\Backups\tg-recall-full.zip
 tg-recall backup create --mode full --include-session --output D:\Backups\tg-recall-full-session.zip
 ```
 
-`essential` содержит согласованный снимок SQLite, конфигурацию profile и wiki.
+`essential` содержит согласованный снимок SQLite и конфигурацию profile.
 `full` дополнительно включает дедуплицированное объектное хранилище media. Session
 и credentials намеренно отсутствуют, если не передан `--include-session`.
 

@@ -106,8 +106,8 @@ tg-recall --json doctor
 ```
 
 Then transcribe exactly one archived media message by its `tg://` citation.
-The citation must already refer to archived media; download it through an
-explicit scope/workflow first when necessary.
+The citation must already refer to archived media; when necessary, queue it
+first with `sync --media voice,audio` and fetch it with `media download`.
 
 ```powershell
 tg-recall --json transcribe run --provider local --citation tg://chat/-1001234567890/message/42 --limit 1
@@ -120,5 +120,4 @@ the same cited item.
 
 An AI agent may request transcription only for one explicit, permitted `tg://`
 citation. It cannot edit transcription settings, use an unscoped pending-job
-run, download a model, or invoke arbitrary arguments. The stable agent Fetch
-instruction remains unchanged; it is not a way to configure transcription.
+run, download a model, or invoke arbitrary arguments.

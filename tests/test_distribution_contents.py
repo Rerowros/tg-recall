@@ -31,13 +31,9 @@ REQUIRED_RUSSIAN_DOCS = {
     "CONTRIBUTING.ru.md",
     "CHANGELOG.ru.md",
     "ROADMAP.ru.md",
-    "docs/agent-setup/prompt.ru.md",
-    "docs/ai-export-packs.ru.md",
     "docs/archive-maintenance.ru.md",
     "docs/backup-restore.ru.md",
     "docs/local-transcription.ru.md",
-    "docs/openai-responses-provider.ru.md",
-    "docs/wiki-memory.ru.md",
 }
 FORBIDDEN_PATH_PARTS = (
     ".tg-ecosystem",
@@ -112,7 +108,6 @@ def test_release_distributions_contain_only_public_files(tmp_path: Path) -> None
     relative_members = [member.removeprefix(root_prefix) for member in members]
     _assert_no_private_paths(relative_members)
     assert {
-        "docs/agent-setup/prompt.md",
         "docs/local-transcription.md",
         "docs/local-transcription.ru.md",
     } <= set(relative_members)
