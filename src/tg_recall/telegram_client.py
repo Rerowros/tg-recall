@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import shutil
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from functools import cache
@@ -17,6 +19,10 @@ from .transcription import is_transcribable_media
 
 
 LINK_RE = re.compile(r"https?://\S+")
+GENERAL_TOPIC = 1
+WRITE_BATCH = 200
+# Pause between 100-message pages; Telegram tolerates this and FloodWait is still honoured.
+SYNC_WAIT_SECONDS = 0.3
 
 
 class TelegramDependencyError(RuntimeError):
@@ -28,6 +34,13 @@ class TelegramNotAuthorizedError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("Telegram session is not authorized. Run `tg-recall telegram auth` in an interactive terminal.")
+
+
+class TelegramBusyError(RuntimeError):
+    """Another tg-recall process holds the Telegram session (usually a running sync)."""
+
+    def __init__(self) -> None:
+        super().__init__("busy: another tg-recall process is using the Telegram session (a sync is running); try again later")
 
 
 class TelegramRetryPendingError(RuntimeError):
@@ -60,13 +73,79 @@ def _noninteractive_client_class(base: type) -> type:
         require_authorized = True
 
         async def __aenter__(self) -> Any:
-            await self.connect()
-            if self.require_authorized and not await self.is_user_authorized():
-                await self.disconnect()
-                raise TelegramNotAuthorizedError()
+            self._session_lock = SessionLock(getattr(getattr(self, "session", None), "filename", None))
+            self._session_lock.acquire()
+            try:
+                await self.connect()
+                if self.require_authorized and not await self.is_user_authorized():
+                    await self.disconnect()
+                    raise TelegramNotAuthorizedError()
+            except BaseException:
+                self._session_lock.release()
+                raise
             return self
 
+        async def __aexit__(self, *exc_info: Any) -> Any:
+            try:
+                return await super().__aexit__(*exc_info)
+            finally:
+                lock = getattr(self, "_session_lock", None)
+                if lock is not None:
+                    lock.release()
+
     return NonInteractiveTelegramClient
+
+
+class SessionLock:
+    """Process-wide exclusive use of one Telethon session file.
+
+    Two processes on one SQLite session corrupt or lock it, so a second
+    caller fails fast (MCP reports "busy") instead of waiting. The OS drops
+    the lock when a process dies, so it never goes stale.
+    """
+
+    def __init__(self, session_file: str | None):
+        self.path = Path(f"{session_file}.lock") if session_file else None
+        self._handle: Any = None
+
+    def acquire(self) -> None:
+        if self.path is None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(self.path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            raise TelegramBusyError() from exc
+        self._handle = handle
+
+    def release(self) -> None:
+        handle, self._handle = self._handle, None
+        if handle is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            handle.close()
 
 
 class TelegramArchiveClient:
@@ -83,6 +162,8 @@ class TelegramArchiveClient:
                     raise ValueError("telegram.phone is required for authorization")
                 await client.start(phone=self.config.telegram.phone)
             me = await client.get_me()
+            if getattr(me, "id", None):
+                self.db.set_meta("self_user_id", str(me.id))
             self.db.audit("telegram_authorized", user_id=getattr(me, "id", None), username=getattr(me, "username", None))
 
     async def check(self) -> dict[str, Any]:
@@ -91,6 +172,9 @@ class TelegramArchiveClient:
         async with client:
             authorized = await client.is_user_authorized()
             me = await client.get_me() if authorized else None
+            if getattr(me, "id", None):
+                # Lets agent output show the owner's own messages as "я".
+                self.db.set_meta("self_user_id", str(me.id))
             return {
                 "authorized": authorized,
                 "user_id": getattr(me, "id", None),
@@ -104,6 +188,9 @@ class TelegramArchiveClient:
             async for dialog in client.iter_dialogs(limit=limit):
                 record = chat_from_dialog(dialog)
                 self.db.upsert_chat(record)
+                if getattr(getattr(dialog, "entity", None), "forum", False):
+                    # Marks the chat as a forum; topic titles arrive on its next sync.
+                    self.db.upsert_forum_topics(record.chat_id, [(GENERAL_TOPIC, "General")])
                 chats.append(record)
         self.db.audit("telegram_chats_discovered", details={"count": len(chats)})
         return chats
@@ -141,6 +228,8 @@ class TelegramArchiveClient:
                     iterator_args["max_id"] = state["oldest_message_id"]
                 elif not backfill and state and state.get("newest_message_id"):
                     iterator_args["min_id"] = state["newest_message_id"]
+                forum = self._is_forum(chat_id)
+                batch: list[MessageRecord] = []
                 try:
                     async for message in client.iter_messages(chat_id, **iterator_args):
                         message_date = ensure_aware(message.date)
@@ -148,24 +237,14 @@ class TelegramArchiveClient:
                             continue
                         if since and message_date < since:
                             break
-                        record = message_from_telethon(chat_id, message)
-                        self.db.upsert_message(record)
+                        record = message_from_telethon(chat_id, message, forum=forum)
+                        batch.append(record)
                         newest_id = max(newest_id or record.message_id, record.message_id)
                         oldest_id = min(oldest_id or record.message_id, record.message_id)
                         synced += 1
-                        if record.has_media and record.media_type and media_policy_allows(scope["media_policy"], record.media_type):
-                            media_id = self.db.enqueue_media(
-                                chat_id,
-                                record.message_id,
-                                record.media_type,
-                                telegram_file_id=str(record.message_id),
-                                transcription_policy=scope["transcription_policy"],
-                            )
-                            if scope["transcription_policy"] != "off":
-                                media = self.db.get_media(media_id)
-                                if media and media.status == "downloaded":
-                                    self.db.enqueue_transcription(media_id)
-                            media_jobs += 1
+                        if len(batch) >= WRITE_BATCH:
+                            media_jobs += self._store_batch(batch, scope["media_policy"], scope["transcription_policy"])
+                    media_jobs += self._store_batch(batch, scope["media_policy"], scope["transcription_policy"])
                     # A completed forward page can safely advance its high
                     # watermark. A completed historical page advances only
                     # the low watermark. Both values stay monotonic in the
@@ -177,6 +256,7 @@ class TelegramArchiveClient:
                         retry_after=None,
                     )
                 except FloodWaitError as exc:
+                    self._store_batch(batch, scope["media_policy"], scope["transcription_policy"])
                     retry_after = (datetime.now(UTC) + timedelta(seconds=exc.seconds)).isoformat()
                     # Telegram yields newest-first. Advancing the forward
                     # high watermark after a partial page could skip unseen
@@ -302,6 +382,128 @@ class TelegramArchiveClient:
         self.db.audit("telegram_transcription_run", details={"completed": completed, "failed": failed, "skipped": skipped})
         return {"completed": completed, "failed": failed, "skipped": skipped}
 
+    async def sync_chat(
+        self,
+        chat_id: int,
+        *,
+        topic_id: int | None = None,
+        since: datetime | None = None,
+        max_seconds: float = 60.0,
+        max_messages: int = 100_000,
+    ) -> dict[str, Any]:
+        """Fill one chat (or one forum topic) from ``since`` to now in a single connection.
+
+        Two interruption-safe passes: newer than the newest stored message,
+        oldest-first, so a stop never leaves a gap below the watermark; then
+        older than the oldest stored message, newest-first, down to ``since``.
+        A forum topic is fetched by itself (GetReplies), not the whole group.
+        """
+
+        if since is not None:
+            since = ensure_aware(since)
+        client = self._client()
+        _, FloodWaitError = _load_telethon()
+        deadline = time.monotonic() + max_seconds
+        fetched = 0
+        complete = True
+        retry_after: str | None = None
+        reply_to = topic_id if topic_id not in (None, GENERAL_TOPIC) else None
+        async with client:
+            forum = await self._refresh_topics(client, chat_id)
+            bounds = self.db.message_bounds(chat_id, topic_id)
+            passes: list[dict[str, Any]] = []
+            if bounds:
+                passes.append({"min_id": bounds["newest_id"], "reverse": True})
+                oldest_date = ensure_aware(datetime.fromisoformat(bounds["oldest_date"]))
+                if since is None or oldest_date > since:
+                    passes.append({"max_id": bounds["oldest_id"]})
+            else:
+                passes.append({})
+            try:
+                for extra in passes:
+                    batch: list[MessageRecord] = []
+                    reverse = bool(extra.get("reverse"))
+                    async for message in client.iter_messages(chat_id, limit=None, reply_to=reply_to, wait_time=SYNC_WAIT_SECONDS, **extra):
+                        if since and not reverse and ensure_aware(message.date) < since:
+                            break
+                        record = message_from_telethon(chat_id, message, forum=forum)
+                        if topic_id == GENERAL_TOPIC and record.topic_id not in (None, GENERAL_TOPIC):
+                            continue
+                        batch.append(record)
+                        fetched += 1
+                        if len(batch) >= WRITE_BATCH:
+                            self._store_batch(batch, "none", "off")
+                        if fetched >= max_messages or time.monotonic() > deadline:
+                            complete = False
+                            break
+                    self._store_batch(batch, "none", "off")
+                    if not complete:
+                        break
+            except FloodWaitError as exc:
+                self._store_batch(batch, "none", "off")
+                complete = False
+                retry_after = (datetime.now(UTC) + timedelta(seconds=exc.seconds)).isoformat()
+        self.db.update_sync_state(chat_id, retry_after=None)
+        self.db.audit("telegram_chat_synced", str(chat_id), chat_id=chat_id, topic_id=topic_id, messages=fetched, complete=complete)
+        after = self.db.message_bounds(chat_id, topic_id)
+        return {
+            "chat_id": chat_id,
+            "topic_id": topic_id,
+            "forum": forum,
+            "fetched": fetched,
+            "complete": complete,
+            "retry_after": retry_after,
+            "stored": after["count"] if after else 0,
+            "oldest_date": after["oldest_date"] if after else None,
+            "newest_date": after["newest_date"] if after else None,
+        }
+
+    async def _refresh_topics(self, client: Any, chat_id: int) -> bool:
+        """Store forum topic titles; returns whether the chat is a forum."""
+
+        try:
+            entity = await client.get_entity(chat_id)
+        except Exception:
+            return self._is_forum(chat_id)
+        if not getattr(entity, "forum", False):
+            return False
+        topics: list[tuple[int, str]] = [(GENERAL_TOPIC, "General")]
+        try:
+            from telethon.tl.functions.messages import GetForumTopicsRequest
+
+            result = await client(GetForumTopicsRequest(peer=entity, offset_date=None, offset_id=0, offset_topic=0, limit=100))
+            topics += [(int(topic.id), str(topic.title)) for topic in getattr(result, "topics", []) if getattr(topic, "title", None)]
+        except Exception:
+            # Titles are a convenience; message topic ids still work without them.
+            pass
+        self.db.upsert_forum_topics(chat_id, topics)
+        return True
+
+    def _is_forum(self, chat_id: int) -> bool:
+        return bool(self.db.forum_topics([chat_id]).get(chat_id))
+
+    def _store_batch(self, batch: list[MessageRecord], media_policy: str, transcription_policy: str) -> int:
+        if not batch:
+            return 0
+        self.db.upsert_messages(batch)
+        media_jobs = 0
+        for record in batch:
+            if record.has_media and record.media_type and media_policy_allows(media_policy, record.media_type):
+                media_id = self.db.enqueue_media(
+                    record.chat_id,
+                    record.message_id,
+                    record.media_type,
+                    telegram_file_id=str(record.message_id),
+                    transcription_policy=transcription_policy,
+                )
+                if transcription_policy != "off":
+                    media = self.db.get_media(media_id)
+                    if media and media.status == "downloaded":
+                        self.db.enqueue_transcription(media_id)
+                media_jobs += 1
+        batch.clear()
+        return media_jobs
+
     def _client(self) -> Any:
         tg = self.config.telegram
         if not tg.api_id or not tg.api_hash:
@@ -337,7 +539,7 @@ def chat_from_dialog(dialog: Any) -> ChatRecord:
     )
 
 
-def message_from_telethon(chat_id: int, message: Any) -> MessageRecord:
+def message_from_telethon(chat_id: int, message: Any, *, forum: bool = False) -> MessageRecord:
     text = getattr(message, "raw_text", None) or getattr(message, "text", None) or ""
     media_type = detect_media_type(message)
     sender = getattr(message, "sender", None)
@@ -346,6 +548,7 @@ def message_from_telethon(chat_id: int, message: Any) -> MessageRecord:
         sender_name = " ".join(
             part for part in [getattr(sender, "first_name", None), getattr(sender, "last_name", None)] if part
         ) or getattr(sender, "username", None)
+    reply_to_id, topic_id = _reply_and_topic(message, forum)
     return MessageRecord(
         chat_id=int(chat_id),
         message_id=int(message.id),
@@ -353,13 +556,52 @@ def message_from_telethon(chat_id: int, message: Any) -> MessageRecord:
         text=text,
         sender_id=getattr(message, "sender_id", None),
         sender_name=sender_name,
-        reply_to_message_id=getattr(getattr(message, "reply_to", None), "reply_to_msg_id", None),
-        forward_from=str(getattr(message, "fwd_from", "")) if getattr(message, "fwd_from", None) else None,
+        reply_to_message_id=reply_to_id,
+        forward_from=forward_label(getattr(message, "fwd_from", None)),
         edit_date=getattr(message, "edit_date", None),
         has_media=media_type is not None,
         media_type=media_type,
         links_json=json.dumps(LINK_RE.findall(text), ensure_ascii=False),
+        topic_id=topic_id,
     )
+
+
+def _reply_and_topic(message: Any, forum: bool) -> tuple[int | None, int | None]:
+    """Split Telegram's reply header into a real reply and the forum topic.
+
+    In a forum every message in a topic "replies" to the topic root; that is
+    membership, not a reply, so it becomes ``topic_id`` and the reply is kept
+    only when it points at another message (``reply_to_top_id`` is set).
+    """
+
+    reply = getattr(message, "reply_to", None)
+    reply_id = getattr(reply, "reply_to_msg_id", None)
+    if type(getattr(message, "action", None)).__name__ == "MessageActionTopicCreate":
+        return None, int(message.id)
+    if reply is not None and getattr(reply, "forum_topic", False):
+        top = getattr(reply, "reply_to_top_id", None)
+        if top:
+            return reply_id, int(top)
+        return None, int(reply_id) if reply_id else None
+    if forum:
+        return reply_id, GENERAL_TOPIC
+    return reply_id, None
+
+
+def forward_label(fwd: Any) -> str | None:
+    """A short, stable origin for a forward instead of Telethon's object repr."""
+
+    if not fwd:
+        return None
+    name = getattr(fwd, "from_name", None)
+    if name:
+        return str(name)
+    peer = getattr(fwd, "from_id", None)
+    for attribute, kind in (("user_id", "user"), ("channel_id", "channel"), ("chat_id", "chat")):
+        value = getattr(peer, attribute, None)
+        if value:
+            return f"{kind}:{value}"
+    return "hidden"
 
 
 def detect_media_type(message: Any) -> str | None:

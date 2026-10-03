@@ -7,7 +7,8 @@
 Telegram profile, credentials, session, SQLite, media, wiki или exports и не
 пишут harness files. `integrate install`, `refresh`, `uninstall` и все `update`
 операции отклоняются до конфигурации, harness mutation, сети или subprocess.
-MCP остаётся только для чтения и регистрирует лишь `tg-recall-mcp`.
+MCP по умолчанию только читает архив (инструмент `sync` появляется лишь при
+`ai_access.allow_sync=true`) и регистрирует лишь `tg-recall-mcp`.
 
 ## Стабильный bootstrap для AI
 

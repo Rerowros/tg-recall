@@ -7,7 +7,7 @@ from typing import Any
 
 from .config import AppConfig, OPENROUTER_EMBEDDING_MODELS
 from .context_budgeting import (
-    ConservativeUtf8JsonTokenCounter,
+    CharClassTokenCounter,
     RetrievalBudgets,
     RetrievalStage,
     TokenAccounting,
@@ -499,7 +499,7 @@ def _bounded_windows(
     context_radius: int,
     token_budget: int,
     ) -> tuple[tuple[EvidenceWindow, ...], bool, TokenAccounting]:
-    counter = ConservativeUtf8JsonTokenCounter()
+    counter = CharClassTokenCounter()
     budgets = RetrievalBudgets(item_limit=max(len(ranked), 1), context_radius=context_radius, token_budget=token_budget)
     usable_budget = budgets.usable_payload_budget
     seen_context: set[tuple[int, int]] = set()
@@ -546,7 +546,7 @@ def _fit_evidence_window(
     proposed: EvidenceWindow,
     selected: list[EvidenceWindow],
     usable_budget: int,
-    counter: ConservativeUtf8JsonTokenCounter,
+    counter: CharClassTokenCounter,
 ) -> EvidenceWindow | None:
     """Admit a full window, then deterministically shrink context if needed."""
 
@@ -573,7 +573,7 @@ def _fit_evidence_window(
     return None
 
 
-def _count_evidence_payload(items: list[EvidenceWindow], counter: ConservativeUtf8JsonTokenCounter) -> int:
+def _count_evidence_payload(items: list[EvidenceWindow], counter: CharClassTokenCounter) -> int:
     return counter.count(canonical_json_bytes({"evidence": [item.as_json() for item in items]}))
 
 
@@ -761,4 +761,5 @@ def _filters_for_chat(filters: SearchFilters | None, chat_id: int) -> SearchFilt
         media_type=base.media_type,
         media_types=base.media_types,
         has_link=base.has_link,
+        chat_ids=base.chat_ids,
     ).normalized()

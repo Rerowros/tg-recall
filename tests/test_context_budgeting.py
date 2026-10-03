@@ -8,6 +8,7 @@ from tg_recall.context_budgeting import (
     DEFAULT_SAFETY_MARGIN,
     ActualUsage,
     CalibrationFixture,
+    CharClassTokenCounter,
     ConservativeUtf8JsonTokenCounter,
     EvidenceItem,
     ExactTokenizerCandidate,
@@ -174,7 +175,7 @@ def test_work_budget_exhaustion_is_stable_and_does_not_serialize_candidates() ->
     assert result.outcome == RetrievalOutcome.BUDGET_EXHAUSTED
     assert result.reason == "work_budget_exhausted"
     assert result.items == ()
-    assert result.accounting.estimated_tokens == ConservativeUtf8JsonTokenCounter().count(canonical_json_bytes({"items": []}))
+    assert result.accounting.estimated_tokens == CharClassTokenCounter().count(canonical_json_bytes({"items": []}))
     assert '"outcome": "budget_exhausted"' in encoded
 
 
@@ -199,3 +200,16 @@ def test_stale_and_reused_results_have_stable_distinct_outcomes() -> None:
 
     assert stale.as_json()["outcome"] == RetrievalOutcome.STALE.value
     assert reused.as_json()["outcome"] == RetrievalOutcome.REUSED.value
+
+
+def test_charclass_counter_tracks_reference_tokens_for_prose(multilingual_fixtures: tuple[CalibrationFixture, ...]) -> None:
+    from tg_recall.context_budgeting import CharClassTokenCounter, estimate_text_tokens
+
+    report = calibrate_counter(CharClassTokenCounter(), multilingual_fixtures)
+    by_name = {item.fixture: item for item in report.measurements}
+    for name in ("russian", "english", "transcript", "json"):
+        assert abs(by_name[name].error_ratio) <= 0.3, name
+    assert all(item.error_ratio >= -0.15 for item in report.measurements)
+    # Cyrillic is no longer charged per UTF-8 byte.
+    text = "Оплата согласована, дедлайн — пятница."
+    assert estimate_text_tokens(text) < len(text.encode("utf-8")) / 2

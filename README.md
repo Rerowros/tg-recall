@@ -49,7 +49,7 @@ usage, scope support, backups, and manual fallbacks.
 
 ## Use with Claude Code / Codex / Cursor
 
-`tg-recall-mcp` is a read-only stdio MCP server. It returns nothing until you allow specific chats for agents:
+`tg-recall-mcp` is a stdio MCP server over the local archive (read-only by default). It returns nothing until you allow specific chats for agents:
 
 ```powershell
 tg-recall config set ai_access.enabled true
@@ -80,7 +80,7 @@ Cursor (`~/.cursor/mcp.json` or project `.cursor/mcp.json`) and other `mcpServer
 }
 ```
 
-Set `TG_RECALL_PROFILE` in the server environment to use a non-default profile. `tg-recall integrate install --target claude-code --scope user` (or `codex` / `cursor`) writes the same entry plus agent instructions with backups; see [harness integration](docs/harness-integration.md). Restart the client after changing its MCP config.
+Set `TG_RECALL_PROFILE` in the server environment to use a non-default profile. `tg-recall integrate install --target claude-code --scope user` (or `codex` / `cursor`) writes the same entry plus agent instructions with backups; see [harness integration](docs/harness-integration.md). Restart the client after changing its MCP config; `ai_access` edits are picked up by a running server without a restart.
 
 ## Stable AI-harness bootstrap
 
@@ -188,7 +188,15 @@ For a long-chat analysis, write a private JSONL export below the profile instead
 tg-recall export --chat -1001234567890 --since 2026-01-01 --include transcripts,media-metadata --format jsonl
 ```
 
-The CLI can sync, download and transcribe local archives. It does not expose agent commands for authentication, credential changes, purge or Telegram write operations. MCP remains read-only.
+The CLI can sync, download and transcribe local archives. It does not expose agent commands for authentication, credential changes, purge or Telegram write operations. MCP reads the archive and, only when the owner enables it, syncs allowed chats (see [MCP](#mcp)).
+
+To fill one chat or forum topic from a date to now in a single run (no 1000-message cap; safe to interrupt and rerun):
+
+```powershell
+tg-recall sync chat https://t.me/<group>/<topic> --since 2026-01-01
+```
+
+The target can be a chat id, a title fragment, a t.me link (`t.me/<username>/<topic>`, `t.me/c/<id>/<topic>`) or `<chat>/<topic>`. `--since` defaults to `30d`, `--max-seconds` to `3600`. A forum topic is fetched on its own instead of the whole group. A lock file keeps two processes off one Telegram session; the second one gets `busy`. When run by an AI agent, `--json` output is compact (no indentation).
 
 For a bounded, offline-verifiable handoff to a local AI workflow, create a separate pack; the existing `export` JSONL command is unchanged:
 
@@ -225,7 +233,23 @@ Start the local stdio server with:
 tg-recall-mcp
 ```
 
-MCP is intentionally read-only and requires explicit `ai_access` configuration. It can list allowed cached chats and scopes, search local messages, return nearby context, and provide extractive cited retrieval.
+MCP requires explicit `ai_access` configuration and only sees the allowed chats. Tools answer in compact text, one line per message, sized to a token budget:
+
+- `search(query)` — hits marked `>` with sender, time, nearby context and a `cite:` line (`tg://chat/<id>/message/<id>`). Optional: `chats`, `since`, `until`, `from`, `media`, `context`, `limit`, `budget`.
+- `read()` — no arguments: new messages since this client's last read (first call: last 24h), a fair share per chat. `read(chats)`: latest messages; `read(chats, since, until)`: a period; `read(refs)`: windows around citations (`full=true` for uncut text).
+- `chats()` — allowed chats with message counts, last activity, sync age and forum topics.
+
+`chats` accepts ids, title fragments, t.me links (`t.me/<username>/<topic>`, `t.me/c/<id>/<topic>`) and `<chat>/<topic>` (topic id or title fragment); `chat_id` is accepted as an alias. Unknown arguments return a did-you-mean error. The owner's own messages are shown as `я` after `tg-recall telegram check`. Research-session tools (`query_knowledge_catalog`, `inspect_research_session`, `expand_cited_sources`) are exposed only with `ai_access.mcp_research_tools=true`.
+
+Optional `ai_access` keys: `max_results` (search hits, default `20`), `max_read_messages` (`200`), `mcp_research_tools` (`false`), `instructions_list_chats` (put allowed chat titles into the MCP instructions, `false`), `allow_sync` (`false`), `sync_max_seconds` (`50`).
+
+To let agents fetch a missing chat, topic or period themselves, enable the `sync` tool:
+
+```powershell
+tg-recall config set ai_access.allow_sync true
+```
+
+`sync(chats, since)` downloads one chat or forum topic (up to 3 targets; `since` defaults to `30d`) from Telegram into the local archive. It only reads Telegram and never sends, stays within the allowlist and policy dates, and is time-boxed by `sync_max_seconds`: a partial result resumes on the next call.
 
 `tg-recall-mcp` is a stdio process: it exits on stdin EOF, when the supervising parent process dies, after `TG_RECALL_MCP_UNUSED_TIMEOUT_SEC` seconds (default `600`) with no `tools/call`, or after `TG_RECALL_MCP_IDLE_TIMEOUT_SEC` seconds (default `1800`) without a request. Set a timeout to `0` to disable it, or set `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping. Hosts may restart the server on the next call.
 
@@ -238,7 +262,7 @@ tg-recall --json index embeddings status --chat-id -1001234567890
 tg-recall --json retrieve "deadline" --chat-id -1001234567890 --retrieval-mode auto --token-budget 8000
 ```
 
-The model path must already exist locally; tg-recall never downloads a model. `auto` reports a keyword fallback when vectors are unavailable or stale. `semantic` is strict and returns `semantic_unavailable` rather than relabeling token overlap as vectors. `index embeddings rebuild` and `remove` are explicit human-only maintenance commands; MCP exposes only bounded `retrieve_evidence` and never builds, rebuilds, or removes an index.
+The model path must already exist locally; tg-recall never downloads a model. `auto` reports a keyword fallback when vectors are unavailable or stale. `semantic` is strict and returns `semantic_unavailable` rather than relabeling token overlap as vectors. `index embeddings rebuild` and `remove` are explicit human-only maintenance commands; MCP never builds, rebuilds, or removes an index.
 
 ### Remote OpenRouter embeddings (explicit opt-in)
 
@@ -256,7 +280,7 @@ tg-recall --json index embeddings build --chat-id -1001234567890 --max-batches 1
 - `ask` defaults to extractive cited retrieval. The optional OpenAI Responses provider requires its extra plus explicit provider-policy and scope approval; disabled or unavailable providers return a cited local fallback.
 - Legacy `--semantic` uses local token overlap. Use `--retrieval-mode auto|hybrid|semantic` for the optional local embedding index.
 - Local Whisper is invoked through an installed `whisper` executable; it is not bundled with the package.
-- MCP cannot sync, download, transcribe, modify configuration or purge data.
+- MCP can sync only when the owner sets `ai_access.allow_sync=true`; it cannot download media, transcribe, modify configuration or purge data.
 
 ## Migration And Backup
 

@@ -136,3 +136,24 @@ def test_purge_chat_removes_indexed_data(tmp_path) -> None:
 
     assert result["messages"] == 1
     assert db.search("deadline") == []
+
+
+def test_multi_chat_filter_never_widens_beyond_the_chat_set(tmp_path) -> None:
+    from datetime import UTC, datetime
+
+    from tg_recall.models import ChatRecord, MessageRecord, SearchFilters
+    from tg_recall.storage import Database
+
+    db = Database(tmp_path / "archive.sqlite3")
+    db.migrate()
+    for chat_id in (10, 11, 12):
+        db.upsert_chat(ChatRecord(chat_id=chat_id, title=f"chat {chat_id}", chat_type="group"))
+        db.upsert_message(MessageRecord(chat_id=chat_id, message_id=1, date=datetime(2026, 1, 2, tzinfo=UTC), text="deadline"))
+
+    allowed = SearchFilters(chat_ids=(10, 11))
+    assert {row.chat_id for row in db.search("deadline", filters=allowed)} == {10, 11}
+    assert {row.chat_id for row in db.semantic_search("deadline", filters=allowed)} == {10, 11}
+    assert {row["chat_id"] for row in db.export_messages(allowed)} == {10, 11}
+    assert db.search("deadline", filters=SearchFilters(chat_ids=())) == []
+    assert db.search("deadline", filters=SearchFilters(chat_id=12, chat_ids=(10, 11))) == []
+    assert SearchFilters(chat_id=12, chat_ids=(10, 11)).normalized().chat_ids == ()
