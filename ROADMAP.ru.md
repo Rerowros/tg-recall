@@ -2,7 +2,7 @@
 
 [English](ROADMAP.md) | **Русский**
 
-`v0.8.0` — текущий релиз. tg-recall — это локальный архив Telegram и несколько дешёвых по токенам инструментов (`search`, `read`, `stats`, `export`, `chats`, `sync`, `transcribe`) для вас и ваших AI-агентов через MCP или CLI.
+`v0.8.1` — текущий релиз. tg-recall — это локальный архив Telegram и несколько дешёвых по токенам инструментов (`search`, `read`, `stats`, `export`, `chats`, `sync`, `transcribe`) для вас и ваших AI-агентов через MCP или CLI.
 
 ## Принципы продукта
 

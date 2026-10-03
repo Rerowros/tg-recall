@@ -2,6 +2,19 @@
 
 [English](CHANGELOG.md) | [Русский](CHANGELOG.ru.md)
 
+## v0.8.1 - 2026-10-03
+
+### Fixed
+
+- `stats(query=…)` also counts voice messages whose transcript matches, each message once, like `search`.
+- `transcribe` uses a local speech-to-text executable configured by path (`transcription.executable`), not only one found on `PATH`. Checked live with Faster-Whisper-XXL on a GPU: two voice messages downloaded and transcribed in about 20 seconds.
+- `sync` from an AI agent's shell (CLI, not MCP) runs for 90 seconds by default instead of an hour, so the agent's command is not cut off by its harness; it resumes on the next call. The owner's terminal keeps 3600 seconds.
+- `tg-recall stats` no longer offers an unused `--budget` option.
+
+### Added
+
+- `scripts/agent_bench.py`: runs your own questions through a real agent (headless Claude Code with only the tg-recall tools) and records turns, tool calls, tool-result tokens, total tokens, cost, time and keyword checks; `--compare` shows the difference between two runs. Questions and results stay in your profile because they name your chats; `scripts/bench_questions.example.json` shows the format.
+
 ## v0.8.0 - 2026-10-03
 
 Agents can now work with big periods cheaply: `stats` counts instead of reading, `export` writes a whole period to a file, and `sync` no longer blocks the agent. The owner can see how agents use the archive with `tg-recall usage`.

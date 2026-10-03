@@ -98,6 +98,11 @@ class WhisperCLIProvider:
     def available() -> bool:
         return shutil.which("whisper") is not None
 
+    def ready(self) -> bool:
+        """The configured executable (or ``whisper`` on PATH) exists."""
+
+        return shutil.which(self.executable) is not None if self.executable else self.available()
+
     def transcribe(self, media_path: Path) -> TranscriptResult:
         executable = _resolve_executable(self.executable, "whisper")
         if not executable:
@@ -153,6 +158,10 @@ class FasterWhisperXXLProvider:
     @staticmethod
     def available() -> bool:
         return shutil.which("faster-whisper-xxl") is not None
+
+    def ready(self) -> bool:
+        # The constructor already resolved the executable and the local model.
+        return True
 
     def transcribe(self, media_path: Path) -> TranscriptResult:
         argv = [

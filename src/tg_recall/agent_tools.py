@@ -67,6 +67,8 @@ NEW_WINDOW = timedelta(hours=24)
 OWNER_EXPORT_CAP = 2_000_000
 MAX_TRANSCRIBE_REFS = 5
 SPOKEN_MEDIA = ("voice", "audio", "video")
+OWNER_SYNC_SECONDS = 3600.0
+AGENT_CLI_SYNC_SECONDS = 90.0
 
 
 @dataclass(frozen=True)
@@ -178,7 +180,9 @@ class AgentTools:
             )
             job.done.wait(max(0.0, float(args.get("max_seconds") or policy.sync_max_seconds)))
             return self._job_report(job)
-        seconds = float(args.get("max_seconds") or policy.sync_max_seconds)
+        # The owner's terminal may run for an hour; an agent's shell call is cut off by the
+        # harness after a few minutes, so it gets a short run and resumes on the next call.
+        seconds = float(args.get("max_seconds") or (OWNER_SYNC_SECONDS if self.owner else AGENT_CLI_SYNC_SECONDS))
         from .telegram_client import TelegramArchiveClient
 
         titles = chat_titles(self.db, decision.chat_ids)
@@ -443,7 +447,7 @@ class AgentTools:
             provider = local_transcription_provider(self.config)
         except Exception:
             provider = None
-        if provider is not None and provider.available():
+        if provider is not None and provider.ready():
             service = TranscriptionService(
                 self.db,
                 fallback_provider=provider,

@@ -101,3 +101,10 @@ def test_cli_surface_is_the_small_core(capsys) -> None:
         "stats",
         "usage",
     }
+
+
+def test_stats_has_no_token_budget_flag() -> None:
+    from tg_recall.cli import build_parser
+
+    options = build_parser()._subparsers._group_actions[0].choices["stats"]._option_string_actions
+    assert "--budget" not in options and "--query" in options

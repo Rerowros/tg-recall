@@ -516,12 +516,19 @@ def archive_stats(
             precise, _ = build_fts_queries(query)
             if precise is None:
                 raise AgentQueryError("query has no searchable words")
+            # Messages whose text or voice transcript matches, each counted once (as in search).
+            matched = (
+                f"SELECT m.id FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ?{where} "
+                "UNION "
+                "SELECT m.id FROM transcripts_fts JOIN transcripts t ON t.id = transcripts_fts.rowid "
+                "JOIN media md ON md.id = t.media_id JOIN messages m ON m.chat_id = md.chat_id AND m.message_id = md.message_id "
+                f"WHERE transcripts_fts MATCH ?{where}"
+            )
             hit_counts = {
                 row[0]: row[1]
                 for row in conn.execute(
-                    f"SELECT {bucket}, COUNT(*) FROM messages_fts JOIN messages m ON m.id = messages_fts.rowid "
-                    f"WHERE messages_fts MATCH ?{where} GROUP BY 1",
-                    [f"text : ({precise})", *params],
+                    f"SELECT {bucket}, COUNT(*) FROM messages m WHERE m.id IN ({matched}) GROUP BY 1",
+                    [f"text : ({precise})", *params, precise, *params],
                 )
             }
             hits = sum(hit_counts.values())

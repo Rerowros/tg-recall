@@ -111,7 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
         "chats", nargs="*", metavar="TARGET", help=f"{target_help}; default: allowlist or every archived chat"
     )
     sync.add_argument("--since", help="Also fetch history back to this date (ISO, 30d, ...); new chats default to 30d")
-    sync.add_argument("--max-seconds", type=float, default=3600.0)
+    sync.add_argument(
+        "--max-seconds", type=float, help="Time limit of this run (default 3600; 90 in an AI agent shell)"
+    )
     sync.add_argument("--media", default="none", help="Queue media for download: none, all or e.g. voice,audio")
     sync.set_defaults(handler=cmd_sync)
 
@@ -134,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     stats = sub.add_parser("stats", help="Counts per day/week/month, query hits, senders, topics")
     stats.add_argument("--query", help="Count hits of this search query per period")
     stats.add_argument("--by", choices=["day", "week", "month"], help="Period (default: by span)")
-    _add_read_scope(stats, target_help)
+    _add_read_scope(stats, target_help, budget=False)
     stats.set_defaults(handler=cmd_stats)
 
     usage = sub.add_parser("usage", help="How agents used tg-recall: calls, tokens, empty searches, repeats")
@@ -228,13 +230,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _add_read_scope(parser: argparse.ArgumentParser, target_help: str) -> None:
+def _add_read_scope(parser: argparse.ArgumentParser, target_help: str, *, budget: bool = True) -> None:
     parser.add_argument("--chat", action="append", dest="chats", metavar="TARGET", help=f"{target_help}; repeatable")
     parser.add_argument("--since", help="ISO date/time or 7d, 24h, today, yesterday")
     parser.add_argument("--until")
     parser.add_argument("--from", dest="sender", help="Sender name fragment, user id or 'me'")
     parser.add_argument("--media", choices=["voice", "audio", "photo", "video", "document", "any"])
-    parser.add_argument("--budget", type=int, help="Max output tokens")
+    if budget:
+        parser.add_argument("--budget", type=int, help="Max output tokens")
 
 
 # Commands that never run from an agent shell. search/read/chats/sync enforce
