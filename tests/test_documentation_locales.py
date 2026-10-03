@@ -1,27 +1,21 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
+import shlex
 from pathlib import Path
 from urllib.parse import unquote
 
 
 ROOT = Path(__file__).resolve().parents[1]
-STABLE_PROMPT_URL = "https://raw.githubusercontent.com/Rerowros/tg-recall/main/docs/agent-setup/prompt.md"
-CANONICAL_FETCH = f"Fetch {STABLE_PROMPT_URL} and follow it."
 REQUIRED_RUSSIAN_DOCS = (
     Path("README.ru.md"),
     Path("SECURITY.ru.md"),
     Path("CONTRIBUTING.ru.md"),
     Path("CHANGELOG.ru.md"),
     Path("ROADMAP.ru.md"),
-    Path("docs/agent-setup/prompt.ru.md"),
-    Path("docs/ai-export-packs.ru.md"),
     Path("docs/archive-maintenance.ru.md"),
     Path("docs/backup-restore.ru.md"),
     Path("docs/local-transcription.ru.md"),
-    Path("docs/openai-responses-provider.ru.md"),
-    Path("docs/wiki-memory.ru.md"),
 )
 MARKDOWN_LINK = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 FENCED_BLOCK = re.compile(r"```([^\n]*)\n(.*?)```", re.DOTALL)
@@ -34,13 +28,9 @@ TRANSLATION_PAIRS = (
     (Path("CONTRIBUTING.md"), Path("CONTRIBUTING.ru.md")),
     (Path("CHANGELOG.md"), Path("CHANGELOG.ru.md")),
     (Path("ROADMAP.md"), Path("ROADMAP.ru.md")),
-    (Path("docs/agent-setup/prompt.md"), Path("docs/agent-setup/prompt.ru.md")),
-    (Path("docs/ai-export-packs.md"), Path("docs/ai-export-packs.ru.md")),
     (Path("docs/archive-maintenance.md"), Path("docs/archive-maintenance.ru.md")),
     (Path("docs/backup-restore.md"), Path("docs/backup-restore.ru.md")),
     (Path("docs/local-transcription.md"), Path("docs/local-transcription.ru.md")),
-    (Path("docs/openai-responses-provider.md"), Path("docs/openai-responses-provider.ru.md")),
-    (Path("docs/wiki-memory.md"), Path("docs/wiki-memory.ru.md")),
 )
 
 
@@ -58,26 +48,12 @@ def test_required_russian_public_documents_exist() -> None:
         assert re.search(r"[А-Яа-яЁё]", text), path
 
 
-def test_readmes_have_reciprocal_navigation_and_the_same_canonical_fetch() -> None:
+def test_readmes_have_reciprocal_navigation() -> None:
     english = _read(Path("README.md"))
     russian = _read(Path("README.ru.md"))
 
     assert any("README.ru.md" in line for line in english.splitlines()[:8])
     assert any("README.md" in line for line in russian.splitlines()[:8])
-    assert english.count(CANONICAL_FETCH) == 1
-    assert russian.count(CANONICAL_FETCH) == 1
-    assert "[человеческий перевод setup prompt — не для Fetch](docs/agent-setup/prompt.ru.md)" in russian
-
-
-def test_russian_setup_prompt_is_human_only_and_never_advertised_as_fetch_target() -> None:
-    russian_prompt = _read(Path("docs/agent-setup/prompt.ru.md"))
-    public_entry_points = _read(Path("README.md")) + _read(Path("README.ru.md"))
-
-    assert STABLE_PROMPT_URL in russian_prompt
-    assert "неавторитет" in russian_prompt.lower()
-    assert "только для" in russian_prompt.lower() and "человек" in russian_prompt.lower()
-    assert "prompt.ru.md and follow it" not in public_entry_points
-    assert "prompt.ru.md и следуй" not in public_entry_points.lower()
 
 
 def test_translations_preserve_every_fenced_command_and_contract_block() -> None:
@@ -121,13 +97,7 @@ def test_translations_preserve_section_structure_and_inline_identifiers() -> Non
         translated_prose = FENCED_BLOCK.sub("", translated_text)
         canonical_identifiers = sorted(re.sub(r"\s+", " ", item) for item in INLINE_CODE.findall(canonical_prose))
         translated_identifiers = sorted(re.sub(r"\s+", " ", item) for item in INLINE_CODE.findall(translated_prose))
-        if translation == Path("docs/agent-setup/prompt.ru.md"):
-            assert Counter(translated_identifiers) - Counter(canonical_identifiers) == Counter(
-                {"docs/agent-setup/prompt.md": 1, STABLE_PROMPT_URL: 1}
-            )
-            assert not Counter(canonical_identifiers) - Counter(translated_identifiers)
-        else:
-            assert canonical_identifiers == translated_identifiers, translation
+        assert canonical_identifiers == translated_identifiers, translation
 
 
 def test_translations_preserve_external_urls() -> None:
@@ -165,3 +135,19 @@ def test_russian_documents_do_not_fall_back_to_english_when_a_translation_exists
             russian_peer = resolved.with_name(f"{resolved.stem}.ru.md")
             line_number = text.count("\n", 0, match.start()) + 1
             assert not russian_peer.exists() or line_number <= 8, (relative_document, raw_target, line_number)
+
+
+def test_documented_cli_commands_parse() -> None:
+    from tg_recall.cli import _normalize_global_arguments, build_parser
+
+    parser = build_parser()
+    documents = (*ROOT.glob("README*.md"), *(ROOT / "docs").rglob("*.md"))
+    checked = 0
+    for document in documents:
+        for _, block in FENCED_BLOCK.findall(document.read_text(encoding="utf-8")):
+            for line in block.splitlines():
+                if line.startswith("tg-recall "):
+                    argv = shlex.split(line, posix=False)[1:]
+                    parser.parse_args(_normalize_global_arguments(argv))
+                    checked += 1
+    assert checked > 20

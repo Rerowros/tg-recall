@@ -10,18 +10,15 @@ Do not include session files, archive data, media, transcripts, real chat identi
 
 ## Automated-Agent Boundary
 
-`ai_access` is an explicit allowlist for automated CLI and MCP archive access.
-An agent must name a permitted chat; requested date, media and result boundaries
-are intersected with `ai_access` and with a saved sync scope. A missing or empty
-intersection is denied before archive rows are read or a Telegram client opens.
+`ai_access` controls what AI agents can reach: every MCP call, and CLI calls from an agent shell (`CLAUDECODE`, `AI_AGENT` or `CODEX_*` without a TTY, `TG_RECALL_AI_MODE=1`, `CI`). Agents see only allowed chats: `ai_access.allowed_chat_ids`, or every archived chat with `ai_access.allow_all_chats`. Requested chat, date, media and result bounds are intersected with `ai_access`; an empty intersection is denied before archive rows are read or a Telegram client opens. Agents can never change the configuration.
 
 | Automated operation | Policy |
 | --- | --- |
-| Cached allowed-chat/scope metadata; `search`, `ask`, `retrieve`, `export` | Allowed only within `ai_access` and an explicit chat scope; automation exports stay below the profile export directory. |
-| `sync run` / `sync ensure` | Allowed only for the effective configured scope; no archive-wide sync. |
-| `media materialize`, `transcribe run --citation` | Allowed only for one permitted `tg://` citation and allowed media type. |
-| MCP | Read-only; it never authorizes, syncs, downloads, transcribes, or writes Telegram data. |
-| `setup`, auth/check/discovery, config/credentials, purge, backup/restore, migration, index rebuild, unscoped jobs/media, Telegram writes | Denied to automation, including legacy command aliases. |
+| `chats`, `search`, `read` (MCP and CLI), `export` | Allowed chats only, within `allowed_since`, `allowed_until`, `allowed_media_types` and result caps; agent exports stay below the profile `exports` directory. |
+| `sync` (MCP and CLI), auto-refresh before `search` / `read` | Only with `ai_access.allow_sync=true` and only for allowed chats. Reads Telegram and writes only the local archive; agents cannot queue media. |
+| `media materialize`, `transcribe run --citation` | CLI only, for one permitted `tg://` citation and an allowed media type. |
+| `setup`, `telegram auth` / `check`, `chats --refresh`, `config`, `purge`, `backup`, `index`, `security`, `jobs`, `media usage` / `download`, `transcribe run` without `--citation` | Denied to agents. |
+| Sending, editing or marking messages as read in Telegram | Not implemented for anyone. |
 
 Policy allow/deny events record operation and safe scope identifiers only. They
 never retain raw query text, message content, credentials, or session data.

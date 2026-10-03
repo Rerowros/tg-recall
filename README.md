@@ -8,53 +8,67 @@
 [![PyPI](https://img.shields.io/badge/PyPI-coming%20soon-lightgrey.svg)](https://pypi.org/project/tg-recall/)
 <!-- After the first PyPI release, replace the PyPI badge image with https://img.shields.io/pypi/v/tg-recall.svg -->
 
-Local-first Telegram archive for people and AI agents. `tg-recall` stores only explicitly selected chats in a local profile, indexes message text and transcripts, and returns source citations such as `tg://chat/.../message/...`.
+A local Telegram archive that your AI agents can query cheaply. `tg-recall` downloads the chats you choose into a local SQLite database and gives Claude Code, Codex, Cursor and other agents a few small tools over MCP or the CLI: `search`, `read`, `chats` and, if you allow it, `sync`. Answers are compact text, one line per message, sized to a token budget, with `tg://chat/<id>/message/<id>` citations back to the original messages.
 
-> Early alpha (current release: v0.7.0). The archive includes private conversations and a Telegram user session. Keep the profile local, use full-disk encryption, and verify important findings against Telegram.
+It only reads Telegram: it never sends, edits or marks messages as read.
+
+> Alpha (current release: v0.7.0). The archive holds private conversations and a Telegram user session: keep the profile local, use full-disk encryption and verify important findings in Telegram. Upgrading from v0.6 or older? v0.7.0 removed many features; read the [changelog](CHANGELOG.md) and make a backup first.
 
 ## Install
 
-Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
-
-```powershell
-git clone https://github.com/Rerowros/tg-recall.git
-cd tg-recall
-uv sync --extra dev
-uv run tg-recall setup
-```
-
-For normal use, install the published universal wheel from the matching GitHub
-Release. GitHub displays the asset SHA-256 digest; compare it before installing
-when your release process requires an independent integrity check. A GitHub
-asset digest is integrity metadata, not a package signature.
+Requires Python 3.13+.
 
 ```powershell
 uv tool install https://github.com/Rerowros/tg-recall/releases/download/v0.7.0/tg_recall-0.7.0-py3-none-any.whl
-tg-recall --json doctor
 ```
 
-`uv tool install --editable .` is for development only. It deliberately keeps
-the checkout as the source of the command, so `tg-recall update apply` will
-report `manual_required` rather than overwrite that checkout. Update an
-editable development install from its original checkout (`git pull`, `uv sync`
-or the project's documented workflow), or reinstall a verified release wheel.
+Install the universal wheel from the [GitHub Release](https://github.com/Rerowros/tg-recall/releases) (compare the SHA-256 digest GitHub shows). To upgrade, run the same command with the newer release URL plus `--force`. `uv tool install tg-recall` / `pip install tg-recall` will work once the package is on PyPI.
 
-Self-update and harness installation are explicit human-only lifecycle
-operations; they are never run automatically. Release checks are disabled by
-default. Only after explicit periodic configuration can an eligible interactive
-non-JSON CLI command make a best-effort check; help, MCP, automation, lifecycle
-commands and JSON commands never do so. See
-[harness integration](docs/harness-integration.md) for `update` / `integrate`
-usage, scope support, backups, and manual fallbacks.
+## Quick start
 
-## Use with Claude Code / Codex / Cursor
-
-`tg-recall-mcp` is a stdio MCP server over the local archive (read-only by default). It returns nothing until you allow specific chats for agents:
+Create API credentials at [my.telegram.org](https://my.telegram.org), then in an interactive terminal:
 
 ```powershell
-tg-recall config set ai_access.enabled true
-tg-recall config set ai_access.allowed_chat_ids "-1001234567890,-1009876543210"
+tg-recall setup
+tg-recall config set telegram.api_id 123456
+tg-recall config set telegram.api_hash "your_api_hash"
+tg-recall config set telegram.phone "+10000000000"
+tg-recall telegram auth
+tg-recall chats --refresh
+tg-recall sync -1001234567890 --since 2026-01-01
+tg-recall search "deadline"
 ```
+
+`chats --refresh` fetches your chat list from Telegram; plain `chats` lists archived chats with their forum topics (`--all` also shows chats without messages).
+
+`sync` takes one or more targets: a chat id, a title fragment, a t.me link (`t.me/<username>/<topic>`, `t.me/c/<id>/<topic>`) or `<chat>/<topic>`. All targets go over one Telegram connection:
+
+- A chat that was never synced starts 30 days back. `--since` (an ISO date or `30d`) also fetches older history; later runs fetch only new messages.
+- A forum topic is fetched on its own, not the whole group.
+- `--max-seconds` (default `3600`) limits one run; an interrupted run is safe, just run it again. A Telegram rate limit (FloodWait) is saved and respected on the next run.
+- A lock file keeps a second process off the same Telegram session; it fails with `busy`.
+- Without targets, `sync` updates the chats in `ai_access.allowed_chat_ids`, or every chat that already has messages.
+- `--media voice,audio` (or `all`) also queues media; fetch it with `media download` and transcribe it with `transcribe run`.
+
+`search`, `read`, `chats` and `sync` print the same compact text that agents get over MCP:
+
+```text
+2 hits · 2 chats · tz +04 · archive synced 5m ago · ~120 tok
+## Work (-1001234567890)
+-- 09-30 --
+>1 05:19 Mark: deadline is friday
+ 2 05:24 я: ok, noted
+## Partners (-1009876543210)
+-- 10-03 --
+>7 04:19 Ann: deadline moved to Monday
+cite: tg://chat/-1001234567890/message/1 tg://chat/-1009876543210/message/7
+```
+
+`>` marks a hit, `↩N` a reply to message N, `…[+N]` a shortened message (`read REF --full` shows all of it), and the `cite:` line lists citations. `read` without arguments shows what is new since your last `read` (the first call covers the last 24 hours); `read --chat T --since 7d` reads a period; `read REF` reads around a citation. With `--json` these commands return `{"text", "count", "chat_ids"}`.
+
+## Connect to Claude Code / Codex / Cursor
+
+`tg-recall-mcp` is a stdio MCP server over the local archive. It returns nothing until you enable [AI access](#ai-access).
 
 Claude Code:
 
@@ -80,218 +94,107 @@ Cursor (`~/.cursor/mcp.json` or project `.cursor/mcp.json`) and other `mcpServer
 }
 ```
 
-Set `TG_RECALL_PROFILE` in the server environment to use a non-default profile. `tg-recall integrate install --target claude-code --scope user` (or `codex` / `cursor`) writes the same entry plus agent instructions with backups; see [harness integration](docs/harness-integration.md). Restart the client after changing its MCP config; `ai_access` edits are picked up by a running server without a restart.
+Set `TG_RECALL_PROFILE` in the server environment to use a non-default profile. Restart the client after changing its MCP config; `ai_access` edits are picked up by a running server without a restart.
 
-## Stable AI-harness bootstrap
+`tg-recall-mcp` exits on stdin EOF, when the parent process dies, after `TG_RECALL_MCP_UNUSED_TIMEOUT_SEC` seconds (default `600`) without a `tools/call`, or after `TG_RECALL_MCP_IDLE_TIMEOUT_SEC` seconds (default `1800`) without a request. Set a timeout to `0` to disable it, or `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping. Hosts may restart the server on the next call.
 
-To have Codex, Claude Code, Cursor, or another agent prepare a safe harness
-setup plan, copy this exact instruction:
+## AI access
 
-```text
-Fetch https://raw.githubusercontent.com/Rerowros/tg-recall/main/docs/agent-setup/prompt.md and follow it.
+Agents see nothing until you, the owner, allow specific chats:
+
+```powershell
+tg-recall config set ai_access.enabled true
+tg-recall config set ai_access.allowed_chat_ids "-1001234567890,-1009876543210"
 ```
 
-The link is permanent and intentionally has no release version. The fetched
-contract resolves the latest stable GitHub Release and an exact universal wheel
-with its GitHub SHA-256 digest; it never installs from `main`. An agent may use
-only `integrate list`, `integrate preview`, and `integrate status` as data-blind
-diagnostics. Package installation and every `integrate install`, `refresh`, or
-`uninstall` operation remain an explicit human command: the agent prints it
-and stops. It requires an explicit `user` or `project` scope (and an explicit
-project root for the latter), preserves manual/partial actions, and tells the
-user to restart the affected harness before `status` verification.
+To allow every archived chat instead, set `ai_access.allow_all_chats` to `true`. To let agents fetch missing chats, topics or periods from Telegram themselves:
 
-The current published release can predate this contract. If its `integrate
-list` command is unavailable, setup stops with a capability-gap message; it
-must not use a checkout or source from `main` as a fallback.
+```powershell
+tg-recall config set ai_access.allow_sync true
+```
 
-`tg-ecosystem` and `tg-ecosystem-mcp` are deprecated compatibility aliases. Use `tg-recall` and `tg-recall-mcp` in new scripts; the aliases may be removed in a future breaking release.
+MCP tools:
 
-## Local Storage
+- `search(query)`: hits with sender, time, nearby context and citations. Optional: `chats`, `since`, `until`, `from`, `media`, `context`, `limit`, `budget`.
+- `read()`: new messages since this client's last read (first call: last 24 hours), a fair share per chat. `read(chats)` gives the latest messages, `read(chats, since, until)` a period, `read(refs)` windows around citations (`full=true` for uncut text).
+- `chats()`: allowed chats with message counts, last activity, sync age and forum topics.
+- `sync(chats, since)`: only with `allow_sync`. Brings chats or topics up to date (no `chats` means all allowed ones), reads Telegram only, limited to `sync_max_seconds` per call; a partial result continues on the next call.
 
-`tg-recall` never writes an archive into the repository by default.
+`chats` accepts ids, title fragments, t.me links and `<chat>/<topic>`; `chat_id` works as an alias. Unknown arguments get a did-you-mean error. After `tg-recall telegram check` the owner's own messages are shown as `я`. With `allow_sync`, `search` and `read` first pull new messages for chats synced more than `auto_refresh_minutes` ago; if that fails (session busy, rate limit), the answer comes from the archive with a note.
+
+The CLI follows the same rules. You at a terminal see every archived chat. Inside an AI agent shell (`CLAUDECODE`, `AI_AGENT` or `CODEX_*` without a TTY, `TG_RECALL_AI_MODE=1`), `search`, `read`, `chats` and `sync` see only `ai_access` chats.
+
+What agents can do: search, read and list allowed chats; sync them when `allow_sync` is on; from the CLI, also `export` one allowed chat into the profile's `exports` directory and `media materialize` or `transcribe run --citation` for one allowed `tg://` citation.
+
+What agents cannot do: change configuration or credentials, log in, refresh the chat list from Telegram, purge data, back up or restore, run queue or index maintenance, or send anything to Telegram. Message text reaches them as untrusted data, not instructions.
+
+| `ai_access` key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Master switch |
+| `allowed_chat_ids` | empty | Chats agents may use |
+| `allow_all_chats` | `false` | Every archived chat is allowed (the list is ignored) |
+| `max_results` | `20` | Max `search` hits |
+| `max_read_messages` | `200` | Max messages per `read` |
+| `allowed_since`, `allowed_until` | none | Date bounds for agents |
+| `allowed_media_types` | `all` | Media types agents may see |
+| `instructions_list_chats` | `false` | Put allowed chat titles into the MCP instructions (costs tokens in every session) |
+| `allow_sync` | `false` | Enable `sync` and auto-refresh |
+| `sync_max_seconds` | `50` | Time limit of one MCP `sync` call |
+| `auto_refresh_minutes` | `10` | Refresh chats older than this before `search` and `read` (`0` turns it off) |
+
+`config set` accepts list values as `1,2`, `[1, 2]` or `1 2`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `setup` | Create the profile config and database |
+| `doctor` | Check the archive, schema, Telegram session and transcription tools |
+| `config show`, `config set KEY VALUE` | Show the redacted config or change a value |
+| `telegram auth`, `telegram check` | Log in (interactive) or check the saved session |
+| `chats [QUERY] [--all] [--refresh]` | List chats and forum topics |
+| `sync [TARGET...] [--since] [--max-seconds] [--media]` | Download new messages, and older history with `--since` |
+| `search QUERY [--chat T]... [--since] [--until] [--from] [--media] [--context] [--limit] [--budget]` | Find messages with context and citations |
+| `read [REF...] [--chat T]... [--since] [--until] [--before] [--after] [--full] [--limit]` | New messages, a period, or windows around citations |
+| `export --chat ID` | Write one chat to JSONL in the profile's `exports` directory |
+| `media usage`, `media download`, `media materialize --citation REF` | Media disk usage, download queued media, fetch the media of one message |
+| `transcribe run` | Transcribe voice, audio and video (see [local transcription](docs/local-transcription.md)) |
+| `jobs` | Inspect, retry or repair the media and transcription queue |
+| `index rebuild` | Rebuild the full-text index |
+| `security check [--fix]` | Check private file permissions |
+| `backup create`, `backup restore` | Make a consistent ZIP backup or restore it into a profile |
+| `purge --chat-id ID`, `purge --all` | Delete local archive data |
+
+Global options go before the command: `--json`, `--profile NAME`, `--home PATH`, `--config PATH`. For example, `tg-recall --json doctor`.
+
+## Local storage
+
+`tg-recall` never writes an archive into the repository or the current directory by default.
 
 | System | Config | Persistent data | State | Cache |
 | --- | --- | --- | --- | --- |
 | Windows | `%LOCALAPPDATA%\tg-recall\config` | `%LOCALAPPDATA%\tg-recall\data` | `%LOCALAPPDATA%\tg-recall\state` | `%LOCALAPPDATA%\tg-recall\cache` |
 | Linux | `~/.config/tg-recall` | `~/.local/share/tg-recall` | `~/.local/state/tg-recall` | `~/.cache/tg-recall` |
 
-Each Telegram account is a profile. Its SQLite archive, session, media objects, wiki and exports remain isolated below `data/profiles/<profile>/`. Media is content-addressed by SHA-256 and SQLite stores a relative key, so a profile can be restored on another OS.
+Each Telegram account is a profile. Its SQLite archive, session, media and exports stay below `data/profiles/<profile>/`. Media is stored by SHA-256 with relative keys, so a profile can be restored on another OS.
 
-Use a self-contained root for an encrypted external disk or portable setup:
+Use a self-contained root for an encrypted external disk or a portable setup:
 
 ```powershell
 tg-recall --home D:\Private\tg-recall --profile work setup
 ```
 
-Precedence is `--home`, `TG_RECALL_HOME`, then system defaults. Profile precedence is `--profile`, `TG_RECALL_PROFILE`, configured active profile, then `default`.
+Precedence is `--home`, `TG_RECALL_HOME`, then system defaults. Profile precedence is `--profile`, `TG_RECALL_PROFILE`, the configured active profile, then `default`.
 
-## Telegram Setup
+## Privacy and security
 
-Create API credentials at [my.telegram.org](https://my.telegram.org), then authorize from an interactive terminal:
+- Only the chats you sync are stored, and only on your machine. Search is local full-text search (SQLite FTS5); no text is sent to any AI provider by `tg-recall` itself.
+- Credentials and the session get best-effort private file permissions (`security check --fix`). Use BitLocker on Windows or LUKS on Linux for encryption at rest.
+- Agent policy decisions are audited with the operation and scope identifiers only, never the query text, message content, credentials or session.
+- Local Whisper is not bundled; the `telegram` transcription provider asks Telegram to transcribe. See [local transcription](docs/local-transcription.md).
+- If a session may have leaked, revoke it in Telegram Settings -> Devices and run `telegram auth` again. Report vulnerabilities as described in [SECURITY.md](SECURITY.md).
 
-```powershell
-tg-recall config set telegram.api_id 123456
-tg-recall config set telegram.api_hash "your_api_hash"
-tg-recall config set telegram.phone "+10000000000"
-tg-recall telegram auth
-tg-recall telegram check
-```
-
-Credentials and the session receive best-effort private permissions. Use BitLocker on Windows or LUKS on Linux for encryption at rest.
-
-## Archive Workflow
-
-List chats, then create a policy-aware scope:
-
-```powershell
-tg-recall chats list
-tg-recall scopes create work --chat -1001234567890 --since 2026-01-01 --media voice,photo --transcribe auto
-tg-recall sync run work --limit 500
-tg-recall sync run work --backfill --limit 500
-```
-
-`media` accepts `none`, `voice`, `audio`, `photo`, `video`, `document`, `all`, or a comma-separated combination. Text and media metadata are always indexed; selected source media is retained locally. Normal runs fetch only messages newer than the saved watermark; `--backfill` explicitly continues into older history.
-
-For a single idempotent workflow:
-
-```powershell
-tg-recall --json sync ensure work --chat -1001234567890 --since 2026-01-01 --media voice,photo --transcribe auto --limit 500
-```
-
-`transcribe auto` tries Telegram transcription first and falls back to local Whisper. `tg-recall --json doctor` checks the current archive, Telegram session, `ffmpeg` and the `whisper` executable.
-
-## Local transcription
-
-`transcribe run` defaults to `sidecar`; `telegram` uses Telegram, `local` uses
-the selected local adapter, and `auto` remains Telegram-first. For typed,
-human-only local backend settings, safe short-voice/long-audio VAD presets,
-and one-citation verification, see [local transcription](docs/local-transcription.md).
-
-## Agent Workflow
-
-Ask an agent to start here:
-
-```powershell
-tg-recall agent guide
-```
-
-For bounded cited evidence:
-
-```powershell
-tg-recall --json retrieve --chat-id -1001234567890 --query "deadline" --context 8 --token-budget 12000
-```
-
-For a long-chat analysis, write a private JSONL export below the profile instead of printing the entire archive:
-
-```powershell
-tg-recall export --chat -1001234567890 --since 2026-01-01 --include transcripts,media-metadata --format jsonl
-```
-
-The CLI can sync, download and transcribe local archives. It does not expose agent commands for authentication, credential changes, purge or Telegram write operations. MCP reads the archive and, only when the owner enables it, syncs allowed chats (see [MCP](#mcp)).
-
-To fill one chat or forum topic from a date to now in a single run (no 1000-message cap; safe to interrupt and rerun):
-
-```powershell
-tg-recall sync chat https://t.me/<group>/<topic> --since 2026-01-01
-```
-
-The target can be a chat id, a title fragment, a t.me link (`t.me/<username>/<topic>`, `t.me/c/<id>/<topic>`) or `<chat>/<topic>`. `--since` defaults to `30d`, `--max-seconds` to `3600`. A forum topic is fetched on its own instead of the whole group. A lock file keeps two processes off one Telegram session; the second one gets `busy`. When run by an AI agent, `--json` output is compact (no indentation).
-
-For a bounded, offline-verifiable handoff to a local AI workflow, create a separate pack; the existing `export` JSONL command is unchanged:
-
-```powershell
-tg-recall --json pack create project-a --chat -1001234567890 --since 2026-01-01 --max-records 200 --token-budget 12000
-tg-recall --json pack inspect PATH\TO\project-a
-tg-recall --json pack verify PATH\TO\project-a
-```
-
-`pack create` requires either a concrete chat plus a date boundary or a saved scope, and always requires positive record and token budgets. It writes under the selected profile's private `exports` directory by default. A human may explicitly pass `--output`; automation cannot. To include synthesized local knowledge, pass only explicit immutable `--wiki-revision` IDs (and `--wiki-scope` when it differs from the saved scope). Packs contain selected evidence and structured assertions, never sessions, credentials, media binaries, or absolute host paths.
-
-Install managed Codex guidance instead of relying on Custom Instructions:
-
-```powershell
-tg-recall integrate install --target codex --scope user
-```
-
-Use this compact text only as a generic/manual fallback when managed harness
-integration is unavailable:
-
-```text
-Если пользователь просит посмотреть Telegram-чат, используй локальный `tg-recall`: сначала выполни `tg-recall agent guide` и следуй его workflow только для запрошенных чатов. Разрешены sync, media download и transcription; запрещены auth, purge и изменение config. Выводы подтверждай ссылками `tg://`.
-```
-
-For cost-aware Codex model routing, progressive context budgets, and the full copy-ready prompt, see [docs/codex-agent-optimization.md](docs/codex-agent-optimization.md). The guide prefers available `gpt-5.3-codex-spark` for near-instant bounded search using its separate Codex limit, with `gpt-5.6-luna` as the stable low-cost fallback.
-
-The repository also contains local-only [private wiki memory](docs/wiki-memory.md) and [private AI export packs](docs/ai-export-packs.md). Pack creation is a profile-local CLI integration; there is no MCP pack tool, automatic wiki compiler, or automatic whole-archive export.
-
-## MCP
-
-Start the local stdio server with:
-
-```powershell
-tg-recall-mcp
-```
-
-MCP requires explicit `ai_access` configuration and only sees the allowed chats. Tools answer in compact text, one line per message, sized to a token budget:
-
-- `search(query)` — hits marked `>` with sender, time, nearby context and a `cite:` line (`tg://chat/<id>/message/<id>`). Optional: `chats`, `since`, `until`, `from`, `media`, `context`, `limit`, `budget`.
-- `read()` — no arguments: new messages since this client's last read (first call: last 24h), a fair share per chat. `read(chats)`: latest messages; `read(chats, since, until)`: a period; `read(refs)`: windows around citations (`full=true` for uncut text).
-- `chats()` — allowed chats with message counts, last activity, sync age and forum topics.
-
-`chats` accepts ids, title fragments, t.me links (`t.me/<username>/<topic>`, `t.me/c/<id>/<topic>`) and `<chat>/<topic>` (topic id or title fragment); `chat_id` is accepted as an alias. Unknown arguments return a did-you-mean error. The owner's own messages are shown as `я` after `tg-recall telegram check`. Research-session tools (`query_knowledge_catalog`, `inspect_research_session`, `expand_cited_sources`) are exposed only with `ai_access.mcp_research_tools=true`.
-
-Optional `ai_access` keys: `max_results` (search hits, default `20`), `max_read_messages` (`200`), `mcp_research_tools` (`false`), `instructions_list_chats` (put allowed chat titles into the MCP instructions, `false`), `allow_sync` (`false`), `sync_max_seconds` (`50`).
-
-To let agents fetch a missing chat, topic or period themselves, enable the `sync` tool:
-
-```powershell
-tg-recall config set ai_access.allow_sync true
-```
-
-`sync(chats, since)` downloads one chat or forum topic (up to 3 targets; `since` defaults to `30d`) from Telegram into the local archive. It only reads Telegram and never sends, stays within the allowlist and policy dates, and is time-boxed by `sync_max_seconds`: a partial result resumes on the next call.
-
-`tg-recall-mcp` is a stdio process: it exits on stdin EOF, when the supervising parent process dies, after `TG_RECALL_MCP_UNUSED_TIMEOUT_SEC` seconds (default `600`) with no `tools/call`, or after `TG_RECALL_MCP_IDLE_TIMEOUT_SEC` seconds (default `1800`) without a request. Set a timeout to `0` to disable it, or set `TG_RECALL_MCP_PARENT_WATCHDOG=0` to disable parent reaping. Hosts may restart the server on the next call.
-
-For optional genuine local-vector retrieval, first configure an already-downloaded model directory in the selected profile (`semantic.enabled=true`, `semantic.provider=sentence-transformers-local`, `semantic.model_path=PATH`) and install the optional runtime:
-
-```powershell
-uv sync --extra local-embeddings
-tg-recall --json index embeddings build --chat-id -1001234567890 --max-batches 1
-tg-recall --json index embeddings status --chat-id -1001234567890
-tg-recall --json retrieve "deadline" --chat-id -1001234567890 --retrieval-mode auto --token-budget 8000
-```
-
-The model path must already exist locally; tg-recall never downloads a model. `auto` reports a keyword fallback when vectors are unavailable or stale. `semantic` is strict and returns `semantic_unavailable` rather than relabeling token overlap as vectors. `index embeddings rebuild` and `remove` are explicit human-only maintenance commands; MCP never builds, rebuilds, or removes an index.
-
-### Remote OpenRouter embeddings (explicit opt-in)
-
-```powershell
-$env:OPENROUTER_API_KEY = "..." # keep this outside tg-recall config
-tg-recall --json config embeddings choices
-tg-recall config embeddings setup --provider openrouter --model perplexity/pplx-embed-v1-0.6b --allow-remote-text
-tg-recall --json index embeddings build --chat-id -1001234567890 --max-batches 1
-```
-
-`--allow-remote-text` acknowledges that only selected message/transcript batches are sent during indexing and only the query is sent during retrieval. Vectors, checkpoints, FTS ranking, and archive data stay local; sync never starts a background reindex. Supported choices are `pplx-embed-v1-0.6b`, `pplx-embed-v1-4b`, and `voyage-4-lite`; `choices` prints price units. `auto` falls back to FTS if the key, policy, or API is unavailable.
-
-## Current Limitations
-
-- `ask` defaults to extractive cited retrieval. The optional OpenAI Responses provider requires its extra plus explicit provider-policy and scope approval; disabled or unavailable providers return a cited local fallback.
-- Legacy `--semantic` uses local token overlap. Use `--retrieval-mode auto|hybrid|semantic` for the optional local embedding index.
-- Local Whisper is invoked through an installed `whisper` executable; it is not bundled with the package.
-- MCP can sync only when the owner sets `ai_access.allow_sync=true`; it cannot download media, transcribe, modify configuration or purge data.
-
-## Migration And Backup
-
-Copy a current `.tg-ecosystem` directory without changing its source:
-
-```powershell
-tg-recall migrate legacy --from C:\code\tg-ecosystem\.tg-ecosystem --dry-run
-tg-recall migrate legacy --from C:\code\tg-ecosystem\.tg-ecosystem
-```
-
-The migration validates SQLite, copies media, converts absolute media paths to relative object keys, and never removes the legacy archive.
+Back up with the built-in commands rather than copying a live database:
 
 ```powershell
 tg-recall backup create --mode essential --output D:\Backups\tg-recall-essential.zip
@@ -299,13 +202,24 @@ tg-recall backup create --mode full --include-session --output D:\Backups\tg-rec
 tg-recall backup restore D:\Backups\tg-recall-essential.zip --profile restored
 ```
 
-`essential` includes the database, profile configuration and wiki. `full` also contains media. Session and credentials are excluded unless `--include-session` is explicit.
+`essential` contains the database and profile configuration, `full` also the media. The session and credentials are included only with `--include-session`.
+
+## Documentation
+
+- [Changelog](CHANGELOG.md)
+- [Local transcription](docs/local-transcription.md)
+- [Backup and restore](docs/backup-restore.md)
+- [Archive maintenance](docs/archive-maintenance.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
+- [Roadmap](ROADMAP.md)
 
 ## Development
 
 ```powershell
+git clone https://github.com/Rerowros/tg-recall.git
+cd tg-recall
+uv sync --extra dev
 uv run pytest -q
 uv build
 ```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), [ROADMAP.md](ROADMAP.md), and [docs/backup-restore.md](docs/backup-restore.md).

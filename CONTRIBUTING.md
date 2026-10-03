@@ -17,10 +17,10 @@ Use synthetic fixtures in `tests/fixtures/`; never add exported chats, real medi
 
 ## Changes
 
-- Keep CLI and MCP behavior on the same storage and retrieval primitives.
+- Keep the CLI and MCP on one code path: `search`, `read`, `chats` and `sync` in both go through `AgentTools`.
 - Preserve `tg://chat/<chat_id>/message/<message_id>` citations for archive evidence.
 - Add focused tests for changed behavior.
-- Update README and public limitations when a feature is incomplete, gated, or provider-dependent.
+- Update the English and Russian docs together; tests check that commands, code identifiers, links and headings match.
 - Run the distribution-content test before requesting review; source archives must contain only public code and documentation.
 - Before review, run `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -q`.
 - Formatting adoption is incremental: the repository-wide format check reports legacy files until a dedicated mechanical sweep is scheduled. Format every Python file you touch with `uv run ruff format <paths>` and do not hide remaining files with Ruff exclusions.
