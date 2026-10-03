@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from .models import MediaRecord
 from .storage import Database
@@ -352,6 +352,39 @@ def _normalize_transcript_json(output: Path, provider_name: str) -> TranscriptRe
     if not isinstance(segments, list) or not all(isinstance(segment, dict) for segment in segments):
         raise RuntimeError("transcription JSON segments must be a list of objects")
     return TranscriptResult(provider=provider_name, text=text.strip(), language=language, segments=segments)
+
+
+def local_transcription_provider(cfg: Any) -> WhisperCLIProvider | FasterWhisperXXLProvider:
+    """Build the profile-selected local provider without accepting shell syntax."""
+
+    settings = cfg.transcription
+    output_dir = Path(cfg.cache_dir) / "transcription"
+    if settings.backend == "whisper-cli":
+        return WhisperCLIProvider(
+            output_dir,
+            executable=settings.executable,
+            model=settings.model,
+            language=settings.language,
+            device=settings.device,
+            compute_type=settings.compute_type,
+            vad_filter=settings.vad_filter,
+            timeout_seconds=settings.timeout_seconds,
+        )
+    if settings.backend == "faster-whisper-xxl":
+        if settings.model is None:
+            raise RuntimeError("Faster-Whisper-XXL requires transcription.model")
+        return FasterWhisperXXLProvider(
+            output_dir,
+            executable=settings.executable,
+            model=settings.model,
+            model_dir=settings.model_dir,
+            language=settings.language,
+            device=settings.device,
+            compute_type=settings.compute_type,
+            vad_filter=settings.vad_filter,
+            timeout_seconds=settings.timeout_seconds,
+        )
+    raise RuntimeError("Unsupported configured local transcription backend")
 
 
 def is_transcribable_media(media_type: str | None) -> bool:

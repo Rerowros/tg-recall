@@ -2,7 +2,7 @@
 
 [English](ROADMAP.md) | [Русский](ROADMAP.ru.md)
 
-`v0.7.0` is the current release. It narrows tg-recall to its core: a local Telegram archive and a few cheap tools (`search`, `read`, `chats`, `sync`) for you and your AI agents over MCP or the CLI.
+`v0.8.0` is the current release. tg-recall is a local Telegram archive with a few cheap tools (`search`, `read`, `stats`, `export`, `chats`, `sync`, `transcribe`) for you and your AI agents over MCP or the CLI.
 
 ## Product principles
 
@@ -18,7 +18,8 @@
 - `v0.2.0`: renamed to `tg-recall`; profiles, portable `--home` mode and content-addressed media.
 - `v0.5.0`: hardened agent policy, archive maintenance (`doctor`, `jobs`) and schema migrations.
 - `v0.6.0`: Russian documentation and configurable local transcription.
-- `v0.7.0`: the core release. LLM answers, embeddings, research sessions, wiki memory, export packs, harness installers, self-update and sync scopes were removed; compact agent tools, forum topics, fast `sync` and agent auto-refresh were added. See the [changelog](CHANGELOG.md).
+- `v0.7.0`: the core release. LLM answers, embeddings, research sessions, wiki memory, export packs, harness installers, self-update and sync scopes were removed; compact agent tools, forum topics, fast `sync` and agent auto-refresh were added.
+- `v0.8.0`: big periods for agents: `stats` counts, `export` to a file, background `sync`, `transcribe` for cited voice messages, search syntax and the `usage` log. See the [changelog](CHANGELOG.md).
 
 ## Next
 

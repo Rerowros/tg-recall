@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Iterable, Sequence
 
-from .agent_query import AgentMessage, ChatInfo
+from .agent_query import AgentMessage, ArchiveStats, ChatInfo
 from .tokens import estimate_text_tokens
 
 HIT_CHARS = 600
@@ -22,7 +22,14 @@ _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f  ]")
 _NEWLINE_RE = re.compile(r"\s*(?:\r\n|\r|\n)\s*")
 _FWD_NAME_RE = re.compile(r"from_name='((?:[^'\\]|\\.)*)'")
 _FWD_PEER_RE = re.compile(r"from_id=Peer(User|Channel|Chat)\((?:user|channel|chat)_id=(-?\d+)\)")
-_MEDIA_LABELS = {"voice": "voice", "audio": "audio", "photo": "photo", "video": "video", "document": "doc", "media": "media"}
+_MEDIA_LABELS = {
+    "voice": "voice",
+    "audio": "audio",
+    "photo": "photo",
+    "video": "video",
+    "document": "doc",
+    "media": "media",
+}
 
 
 @dataclass
@@ -32,6 +39,8 @@ class RenderContext:
     full: bool = False
     topics: dict[int, dict[int, str]] = field(default_factory=dict)
     now: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Date on every line instead of '-- day --' headers: a file read in chunks keeps its dates.
+    dated: bool = False
 
 
 def tz_label(now: datetime | None = None) -> str:
@@ -85,7 +94,7 @@ def render_messages(
                 last_day = None
             local = _local(message.date)
             day = local.strftime("%Y-%m-%d") if local.year != ctx.now.astimezone().year else local.strftime("%m-%d")
-            if day != last_day:
+            if day != last_day and not ctx.dated:
                 lines.append(f"-- {day} --")
                 last_day = day
             lines.append(_message_line(message, local, ctx, _show_reply(message, shown, targets)))
@@ -118,10 +127,46 @@ def render_chat_list(chats: Sequence[ChatInfo], now: datetime | None = None, *, 
         )
         if chat.topics:
             shown = ", ".join(
-                f"/{topic_id} {_clean(title, 30)}" + (f" {_compact_count(count)}" if count else "") for topic_id, title, count in chat.topics[:10]
+                f"/{topic_id} {_clean(title, 30)}" + (f" {_compact_count(count)}" if count else "")
+                for topic_id, title, count in chat.topics[:10]
             )
             more = f", +{len(chat.topics) - 10}" if len(chat.topics) > 10 else ""
             lines.append(f"  topics: {shown}{more}")
+    return "\n".join(lines)
+
+
+def render_stats(
+    stats: ArchiveStats, titles: dict[int, str], topics: dict[int, dict[int, str]], query: str | None
+) -> str:
+    """Aggregates in a few lines: per period ``bucket count[/hits]``, then top lists."""
+
+    lines: list[str] = []
+    label = "msgs/hits" if stats.hits is not None else "msgs"
+    if stats.buckets:
+        cells = " · ".join(
+            f"{key} {count}" + (f"/{hits}" if hits is not None else "") for key, count, hits in stats.buckets
+        )
+        lines.append(f"by {stats.unit} ({label}): {cells}")
+    if len(stats.chats) > 1:
+        lines.append(
+            "chats: "
+            + " · ".join(
+                f"{_clean(titles.get(chat_id) or str(chat_id), 40)} ({chat_id}) {_compact_count(count)}"
+                for chat_id, count in stats.chats[:10]
+            )
+        )
+    if stats.topics:
+        lines.append(
+            "topics: "
+            + " · ".join(
+                f"{_clean(topics.get(chat_id, {}).get(topic_id) or 'topic', 30)} ({chat_id}/{topic_id}) {_compact_count(count)}"
+                for chat_id, topic_id, count in stats.topics
+            )
+        )
+    if stats.senders:
+        lines.append(
+            "senders: " + " · ".join(f"{_clean(name, 30)} {_compact_count(count)}" for name, count in stats.senders)
+        )
     return "\n".join(lines)
 
 
@@ -157,7 +202,8 @@ def _message_line(message: AgentMessage, local: datetime, ctx: RenderContext, sh
         meta += f" fwd:{forwarded}"
     limit = None if ctx.full else (HIT_CHARS if message.hit else CONTEXT_CHARS)
     body = _body(message, limit)
-    return f"{marker}{message.message_id} {local.strftime('%H:%M')} {sender}{meta}: {body}"
+    stamp = local.strftime("%Y-%m-%d %H:%M" if ctx.dated else "%H:%M")
+    return f"{marker}{message.message_id} {stamp} {sender}{meta}: {body}"
 
 
 def _sender(message: AgentMessage, ctx: RenderContext) -> str:
